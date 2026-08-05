@@ -54,6 +54,22 @@ if (!_domainCols.some(c => c.name === 'monitor_only')) {
   console.log("Migration: added 'monitor_only' column to domains table.");
 }
 
+// Bootstrap current domain: if none is set, pick the oldest active
+// non-monitor-only domain. Runs once on first boot after this feature ships.
+if (!getCurrentDomain()) {
+  const oldest = db.prepare(`
+    SELECT * FROM domains
+    WHERE status = 'active' AND monitor_only = 0
+    ORDER BY added_at ASC LIMIT 1
+  `).get();
+  if (oldest) {
+    setCurrentDomain(oldest.url);
+    console.log(`Bootstrap: set current domain to ${oldest.url}`);
+  } else {
+    console.log('Bootstrap: no active domain to set as current yet. Will set on first add.');
+  }
+}
+
 // Middleware
 app.use(express.json());
 app.use(express.static('.'));
@@ -115,16 +131,62 @@ function getAllDomains() {
   return stmt.all();
 }
 
+// ── Current-domain management ──────────────────────────────────
+// The "current" domain is the single destination all landing pages
+// redirect to. Stored in the meta table (key/value) as current_domain_url.
+// When it gets blocked, promoteNextDomain() picks the oldest active backup.
+
+const metaGet = db.prepare('SELECT value FROM meta WHERE key = ?');
+const metaSet = db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)');
+
+function getCurrentDomain() {
+  const row = metaGet.get('current_domain_url');
+  if (!row || !row.value) return null;
+  const domain = db.prepare('SELECT * FROM domains WHERE url = ?').get(row.value);
+  return domain || null;
+}
+
+function setCurrentDomain(url) {
+  metaSet.run('current_domain_url', url);
+}
+
+// Pick the oldest active non-monitor-only domain that isn't the blocked one.
+// Returns the promoted domain row, or null if the pool is exhausted.
+function promoteNextDomain(excludeUrl) {
+  const candidate = db.prepare(`
+    SELECT * FROM domains
+    WHERE status = 'active' AND monitor_only = 0 AND url != ?
+    ORDER BY added_at ASC LIMIT 1
+  `).get(excludeUrl);
+  if (candidate) {
+    setCurrentDomain(candidate.url);
+  }
+  return candidate || null;
+}
+
 // TrustPositif health check
-async function checkDomainsHealth() {
-  console.log('Starting scheduled domain health check...');
+//   scope: 'current' → check only the current domain (fast failover, cheap)
+//   scope: 'all'     → check all non-blocked + all monitor-only (full sweep)
+async function checkDomainsHealth({ scope = 'all' } = {}) {
+  console.log(`Starting domain health check (scope: ${scope})...`);
 
   const allDomains = getAllDomains();
+  const current = getCurrentDomain();
 
-  // Filter: skip already blocked domains — but always re-check monitor-only domains
-  // (they're tracked for status even when blocked, yet never served to landing pages)
-  const domainsToCheck = allDomains.filter(d => d.monitor_only || d.status !== 'blocked');
-  const domainsSkipped = allDomains.filter(d => !d.monitor_only && d.status === 'blocked');
+  let domainsToCheck;
+  if (scope === 'current') {
+    // Only check the current domain. If none is set, check nothing.
+    domainsToCheck = current ? [current] : [];
+  } else {
+    // Full sweep: skip already-blocked (unless monitor-only, which is always re-checked)
+    domainsToCheck = allDomains.filter(d => d.monitor_only || d.status !== 'blocked');
+  }
+  const domainsSkipped = allDomains.filter(d => !domainsToCheck.includes(d));
+
+  if (domainsToCheck.length === 0) {
+    console.log('No domains require checking in this run.');
+    return { checkedCount: 0, skippedCount: domainsSkipped.length, changes: 0 };
+  }
 
   if (domainsToCheck.length === 0) {
     console.log('No domains require checking in this run.');
@@ -235,6 +297,27 @@ async function checkDomainsHealth() {
       await notifyTelegram(messages.join('\n\n'));
     }
 
+    // Auto-promote: if the current domain is now blocked, switch to next active backup.
+    const currentAfter = getCurrentDomain();
+    if (currentAfter && currentAfter.status === 'blocked') {
+      const promoted = promoteNextDomain(currentAfter.url);
+      if (promoted) {
+        console.log(`Current domain blocked. Promoted backup: ${promoted.url}`);
+        await notifyTelegram(
+          `🔄 <b>AUTO-SWITCHED DESTINATION</b>\n` +
+          `Previous <code>${currentAfter.url}</code> is blocked.\n` +
+          `All landing pages now redirect to <code>${promoted.url}</code>.`
+        );
+      } else {
+        console.log(`Current domain blocked but NO active backup available. Pool exhausted.`);
+        await notifyTelegram(
+          `⚠️ <b>POOL EXHAUSTED</b>\n` +
+          `Current <code>${currentAfter.url}</code> is blocked and there is no active backup.\n` +
+          `Add a fresh domain to restore service.`
+        );
+      }
+    }
+
     console.log(
       `Domain check complete. Checked: ${domainsToCheck.length}, Skipped: ${domainsSkipped.length}, Changes: ${changeLogged.length}`
     );
@@ -260,11 +343,18 @@ app.get('/api/status', async (req, res) => {
       .filter(d => d.status !== 'blocked' && !d.monitor_only)
       .map(d => d.url);
 
-    const metaStmt = db.prepare('SELECT value FROM meta WHERE key = ?');
-    const lastRun = metaStmt.get('last_run');
+    const currentDomain = getCurrentDomain();
+    // Current must be active (not blocked) to be served; else fall back to first active.
+    const currentUrl =
+      currentDomain && currentDomain.status === 'active' && !currentDomain.monitor_only
+        ? currentDomain.url
+        : (activeDomains[0] || null);
+
+    const lastRun = metaGet.get('last_run');
 
     res.json({
       success: true,
+      current: currentUrl,
       active: activeDomains,
       count: activeDomains.length,
       lastChecked: lastRun ? lastRun.value : null,
@@ -317,8 +407,14 @@ app.post('/api/manage', requireAuth, async (req, res) => {
         throw err;
       }
 
+      // If no current domain is set and this one is serveable (not monitor-only),
+      // make it the current destination.
+      if (!monitorOnly && !getCurrentDomain()) {
+        setCurrentDomain(domainUrl);
+      }
+
       // Trigger immediate check
-      await checkDomainsHealth();
+      await checkDomainsHealth({ scope: 'all' });
 
       return res.json({
         success: true,
@@ -377,12 +473,38 @@ app.post('/api/manage', requireAuth, async (req, res) => {
 
     if (action === 'check-now') {
       console.log('Triggering manual health check...');
-      const result = await checkDomainsHealth();
+      const result = await checkDomainsHealth({ scope: 'all' });
 
       return res.json({
         success: true,
         message: 'Manual health check execution complete.',
         checkResult: result,
+        data: { domains: getAllDomains() },
+      });
+    }
+
+    if (action === 'set-current') {
+      if (!domain) {
+        return res.status(400).json({ error: 'Missing parameter: domain is required for set-current action.' });
+      }
+
+      let domainUrl = domain.trim();
+      if (!domainUrl.startsWith('http://') && !domainUrl.startsWith('https://')) {
+        domainUrl = 'https://' + domainUrl;
+      }
+
+      const target = db.prepare('SELECT * FROM domains WHERE url = ?').get(domainUrl);
+      if (!target) {
+        return res.status(404).json({ error: `Domain ${domainUrl} not found in the pool.` });
+      }
+      if (target.monitor_only) {
+        return res.status(400).json({ error: `Cannot set a monitor-only domain as current.` });
+      }
+
+      setCurrentDomain(domainUrl);
+      return res.json({
+        success: true,
+        message: `Set ${domainUrl} as the current destination.`,
         data: { domains: getAllDomains() },
       });
     }
@@ -396,36 +518,41 @@ app.post('/api/manage', requireAuth, async (req, res) => {
 
 // ==================== SCHEDULER ====================
 
-// Run health check every hour
-cron.schedule('0 * * * *', async () => {
-  const result = await checkDomainsHealth();
+// Fast failover: check the current domain every 30 minutes.
+cron.schedule('*/30 * * * *', async () => {
+  const result = await checkDomainsHealth({ scope: 'current' });
+  metaSet.run('last_run', new Date().toISOString());
+});
 
-  // Update last_run in meta
-  const stmt = db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)');
-  stmt.run('last_run', new Date().toISOString());
+// Full sweep: check the whole pool every 6 hours (backups + monitor-only).
+cron.schedule('0 */6 * * *', async () => {
+  const result = await checkDomainsHealth({ scope: 'all' });
+  metaSet.run('last_run', new Date().toISOString());
 });
 
 // ==================== START SERVER ====================
 
 app.listen(PORT, '0.0.0.0', () => {
+  const current = getCurrentDomain();
+  const currentDisplay = current ? current.url : '(none set)';
   console.log(`
 ╔════════════════════════════════════════════════════════════╗
 ║  🚀 Gateway Control Plane                                  ║
 ║  ─────────────────────────────────────────────────────────  ║
 ║  Port: ${PORT}                                           ║
+║  Current destination: ${currentDisplay}
 ║  Admin API: http://localhost:${PORT}/api/manage            ║
 ║  Public API: http://localhost:${PORT}/api/status            ║
 ║  Dashboard: http://localhost:${PORT}                         ║
-║  Cron: Every hour at minute 0                               ║
+║  Cron: current every 30min · full pool every 6h            ║
 ╚════════════════════════════════════════════════════════════╝
   `);
 
   // Run initial health check on startup (after 10 seconds delay)
   setTimeout(async () => {
-    console.log('Running initial health check...');
-    await checkDomainsHealth();
-    const stmt = db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)');
-    stmt.run('last_run', new Date().toISOString());
+    console.log('Running initial health check (full sweep)...');
+    await checkDomainsHealth({ scope: 'all' });
+    metaSet.run('last_run', new Date().toISOString());
   }, 10000);
 });
 

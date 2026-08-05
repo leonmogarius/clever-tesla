@@ -101,11 +101,15 @@
       clearTimeout(timeoutId);
       if (res.ok) {
         const data = await res.json();
-        if (data.success && Array.isArray(data.active) && data.active.length > 0) {
-          activeDomainsList = data.active;
-          console.log("[Gateway] Successfully loaded active domains pool:", activeDomainsList);
+        // Prefer the single "current" destination; fall back to first active for backward compat.
+        if (data.success && data.current) {
+          activeDomainsList = [data.current];
+          console.log("[Gateway] Loaded current destination:", data.current);
+        } else if (data.success && Array.isArray(data.active) && data.active.length > 0) {
+          activeDomainsList = [data.active[0]];
+          console.log("[Gateway] No current set; using first active domain:", data.active[0]);
         } else {
-          console.warn("[Gateway] Control plane status returned empty active list.");
+          console.warn("[Gateway] Control plane returned no current/active domain.");
         }
       } else {
         console.warn("[Gateway] Control plane status API returned non-OK status:", res.status);
