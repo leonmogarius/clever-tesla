@@ -47,6 +47,38 @@ db.exec(`
   );
 `);
 
+// ── Current-domain management (prepared statements + helpers) ──
+// Defined early because the startup migrations below call getCurrentDomain().
+// The "current" domain is the single destination all landing pages redirect to.
+// Stored in meta (key/value) as current_domain_url. When blocked, promoteNextDomain()
+// picks the oldest active backup.
+const metaGet = db.prepare('SELECT value FROM meta WHERE key = ?');
+const metaSet = db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)');
+
+function getCurrentDomain() {
+  const row = metaGet.get('current_domain_url');
+  if (!row || !row.value) return null;
+  const domain = db.prepare('SELECT * FROM domains WHERE url = ?').get(row.value);
+  return domain || null;
+}
+
+function setCurrentDomain(url) {
+  metaSet.run('current_domain_url', url);
+}
+
+// Pick the oldest active non-monitor-only domain that isn't the blocked one.
+function promoteNextDomain(excludeUrl) {
+  const candidate = db.prepare(`
+    SELECT * FROM domains
+    WHERE status = 'active' AND monitor_only = 0 AND url != ?
+    ORDER BY added_at ASC LIMIT 1
+  `).get(excludeUrl);
+  if (candidate) {
+    setCurrentDomain(candidate.url);
+  }
+  return candidate || null;
+}
+
 // Migration: add monitor_only column for databases created before this feature
 const _domainCols = db.prepare("PRAGMA table_info(domains)").all();
 if (!_domainCols.some(c => c.name === 'monitor_only')) {
@@ -129,39 +161,6 @@ function requireAuth(req, res, next) {
 function getAllDomains() {
   const stmt = db.prepare('SELECT * FROM domains ORDER BY id DESC');
   return stmt.all();
-}
-
-// ── Current-domain management ──────────────────────────────────
-// The "current" domain is the single destination all landing pages
-// redirect to. Stored in the meta table (key/value) as current_domain_url.
-// When it gets blocked, promoteNextDomain() picks the oldest active backup.
-
-const metaGet = db.prepare('SELECT value FROM meta WHERE key = ?');
-const metaSet = db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)');
-
-function getCurrentDomain() {
-  const row = metaGet.get('current_domain_url');
-  if (!row || !row.value) return null;
-  const domain = db.prepare('SELECT * FROM domains WHERE url = ?').get(row.value);
-  return domain || null;
-}
-
-function setCurrentDomain(url) {
-  metaSet.run('current_domain_url', url);
-}
-
-// Pick the oldest active non-monitor-only domain that isn't the blocked one.
-// Returns the promoted domain row, or null if the pool is exhausted.
-function promoteNextDomain(excludeUrl) {
-  const candidate = db.prepare(`
-    SELECT * FROM domains
-    WHERE status = 'active' AND monitor_only = 0 AND url != ?
-    ORDER BY added_at ASC LIMIT 1
-  `).get(excludeUrl);
-  if (candidate) {
-    setCurrentDomain(candidate.url);
-  }
-  return candidate || null;
 }
 
 // TrustPositif health check
