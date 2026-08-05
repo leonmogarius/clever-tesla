@@ -28,7 +28,9 @@ const CONFIG = {
   // Point this to your Docker Control Plane server (see gateway-control/).
   // It can be hosted anywhere; landing pages fetch /api/status from here.
   // Leave empty if you only want to use the local fallback domains pool.
-  centralApiUrl: "http://YOUR-SERVER-IP:34567",
+  // Must be HTTPS if the landing page is served over HTTPS (browsers block
+  // mixed content — an HTTPS page fetching an HTTP endpoint).
+  centralApiUrl: "https://srv1755625.hstgr.cloud",
 
   // ── Redirect Settings ────────────────────────────────────────
 
