@@ -6,7 +6,8 @@ services:
     container_name: gateway-control
     restart: unless-stopped
     ports:
-      # Access via: http://YOUR-SERVER-IP:34567
+      # Direct access (optional): http://YOUR-SERVER-IP:34567
+      # Primary access via Traefik HTTPS: https://srv1755625.hstgr.cloud
       - "34567:34567"
     environment:
       - PORT=34567
@@ -19,6 +20,14 @@ services:
     volumes:
       # Persist SQLite database - survives container restarts
       - ./data:/app/data
+    labels:
+      # ── Traefik routing: HTTPS via srv1755625.hstgr.cloud ──
+      - "traefik.enable=true"
+      - "traefik.http.routers.gateway.rule=Host(`srv1755625.hstgr.cloud`)"
+      - "traefik.http.routers.gateway.entrypoints=web,websecure"
+      - "traefik.http.routers.gateway.tls=true"
+      - "traefik.http.routers.gateway.tls.certresolver=letsencrypt"
+      - "traefik.http.services.gateway.loadbalancer.server.port=34567"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:34567/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -26,4 +35,5 @@ services:
       retries: 3
       start_period: 40s
 
-# No networks section needed - uses default bridge
+# No networks section needed - Traefik runs on host network and reaches
+# this container via its published port (localhost:34567).
