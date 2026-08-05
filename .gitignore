@@ -1,0 +1,16 @@
+# === Secrets / credentials (never commit) ===
+.anymhost-credentials.local
+*.local
+.env
+.env.*
+!.env.example
+.ssh_key*
+.ssh_claude*
+.askpass*
+
+# === Local data / runtime ===
+gateway-control/data/
+*.db
+*.db-journal
+node_modules/
+.DS_Store

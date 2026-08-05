@@ -38,13 +38,21 @@ db.exec(`
     status TEXT DEFAULT 'unknown',
     last_checked TEXT,
     added_at TEXT,
-    blocked_since TEXT
+    blocked_since TEXT,
+    monitor_only INTEGER NOT NULL DEFAULT 0
   );
   CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT
   );
 `);
+
+// Migration: add monitor_only column for databases created before this feature
+const _domainCols = db.prepare("PRAGMA table_info(domains)").all();
+if (!_domainCols.some(c => c.name === 'monitor_only')) {
+  db.exec("ALTER TABLE domains ADD COLUMN monitor_only INTEGER NOT NULL DEFAULT 0");
+  console.log("Migration: added 'monitor_only' column to domains table.");
+}
 
 // Middleware
 app.use(express.json());
@@ -113,9 +121,10 @@ async function checkDomainsHealth() {
 
   const allDomains = getAllDomains();
 
-  // Filter: skip already blocked domains
-  const domainsToCheck = allDomains.filter(d => d.status !== 'blocked');
-  const domainsSkipped = allDomains.filter(d => d.status === 'blocked');
+  // Filter: skip already blocked domains — but always re-check monitor-only domains
+  // (they're tracked for status even when blocked, yet never served to landing pages)
+  const domainsToCheck = allDomains.filter(d => d.monitor_only || d.status !== 'blocked');
+  const domainsSkipped = allDomains.filter(d => !d.monitor_only && d.status === 'blocked');
 
   if (domainsToCheck.length === 0) {
     console.log('No domains require checking in this run.');
@@ -248,7 +257,7 @@ app.get('/api/status', async (req, res) => {
   try {
     const domains = getAllDomains();
     const activeDomains = domains
-      .filter(d => d.status !== 'blocked')
+      .filter(d => d.status !== 'blocked' && !d.monitor_only)
       .map(d => d.url);
 
     const metaStmt = db.prepare('SELECT value FROM meta WHERE key = ?');
@@ -297,9 +306,10 @@ app.post('/api/manage', requireAuth, async (req, res) => {
         domainUrl = 'https://' + domainUrl;
       }
 
+      const monitorOnly = req.body.monitorOnly ? 1 : 0;
       try {
-        const stmt = db.prepare('INSERT INTO domains (url, status, added_at) VALUES (?, ?, ?)');
-        stmt.run(domainUrl, 'unknown', new Date().toISOString());
+        const stmt = db.prepare('INSERT INTO domains (url, status, added_at, monitor_only) VALUES (?, ?, ?, ?)');
+        stmt.run(domainUrl, 'unknown', new Date().toISOString(), monitorOnly);
       } catch (err) {
         if (err.message.includes('UNIQUE')) {
           return res.status(400).json({ error: `Domain ${domainUrl} already exists in the pool.` });
@@ -337,6 +347,30 @@ app.post('/api/manage', requireAuth, async (req, res) => {
       return res.json({
         success: true,
         message: `Removed ${domainUrl} successfully.`,
+        data: { domains: getAllDomains() },
+      });
+    }
+
+    if (action === 'toggle-monitor') {
+      if (!domain) {
+        return res.status(400).json({ error: 'Missing parameter: domain is required for toggle-monitor action.' });
+      }
+
+      let domainUrl = domain.trim();
+      if (!domainUrl.startsWith('http://') && !domainUrl.startsWith('https://')) {
+        domainUrl = 'https://' + domainUrl;
+      }
+
+      const stmt = db.prepare('UPDATE domains SET monitor_only = CASE WHEN monitor_only = 1 THEN 0 ELSE 1 END WHERE url = ?');
+      const result = stmt.run(domainUrl);
+
+      if (result.changes === 0) {
+        return res.status(404).json({ error: `Domain ${domainUrl} not found in the pool.` });
+      }
+
+      return res.json({
+        success: true,
+        message: `Toggled monitor-only for ${domainUrl}.`,
         data: { domains: getAllDomains() },
       });
     }

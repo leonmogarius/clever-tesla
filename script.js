@@ -16,7 +16,7 @@
   /* ── Wait for DOM ─────────────────────────────────────────────── */
   document.addEventListener("DOMContentLoaded", init);
 
-  function init() {
+  async function init() {
     if (typeof CONFIG === "undefined") {
       console.error("[Gateway] config.js not loaded or CONFIG not defined.");
       return;
@@ -27,7 +27,10 @@
 
     injectSEO();
     injectContent();
-    fetchActiveDomains(); // Fetch fresh list in background
+    // Await the control-plane lookup BEFORE starting the countdown/redirect.
+    // Previously this fired-and-forgot in parallel with startCountdown(), so a
+    // slow cross-origin fetch (>5s) lost the race and the fallback was always used.
+    await fetchActiveDomains();
     startCountdown();
   }
 
@@ -79,14 +82,23 @@
   /* ── Fetch active domains from Control Plane ──────────────────── */
   async function fetchActiveDomains() {
     const { centralApiUrl } = CONFIG;
-    if (!centralApiUrl || centralApiUrl.includes("your-control-plane")) {
+    if (
+      !centralApiUrl ||
+      centralApiUrl.includes("your-control-plane") ||
+      centralApiUrl.includes("your-server-ip")
+    ) {
       console.log("[Gateway] No central control plane configured. Using config.js fallback.");
       return;
     }
 
     try {
       console.log("[Gateway] Fetching domain list from control plane...");
-      const res = await fetch(`${centralApiUrl}/api/status`);
+      // Race the fetch against a timeout so a dead/slow control plane doesn't
+      // stall the redirect indefinitely. Falls back to config.domains on timeout.
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), CONFIG.controlPlaneTimeoutMs ?? 4000);
+      const res = await fetch(`${centralApiUrl}/api/status`, { signal: controller.signal });
+      clearTimeout(timeoutId);
       if (res.ok) {
         const data = await res.json();
         if (data.success && Array.isArray(data.active) && data.active.length > 0) {

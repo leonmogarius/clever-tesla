@@ -1,5 +1,7 @@
 # 🐳 Docker Deployment Guide
 
+> 🔑 **Admin API Key: `8836591554`** — used to log into the dashboard (`/`) and authenticate `/api/manage`.
+
 ## Quick Start
 
 1. **Create `.env` file:**
@@ -10,7 +12,7 @@
 2. **Edit `.env` and set your values:**
    ```bash
    # Required
-   ADMIN_API_KEY=some-long-secure-string-here
+   ADMIN_API_KEY=8836591554
 
    # Optional (for alerts)
    TELEGRAM_BOT_TOKEN=your-bot-token

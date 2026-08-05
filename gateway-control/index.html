@@ -217,6 +217,12 @@
       border: 1px solid rgba(234, 179, 8, 0.2);
     }
 
+    .status-monitor {
+      background: rgba(168, 85, 247, 0.12);
+      color: #c084fc;
+      border: 1px solid rgba(168, 85, 247, 0.3);
+    }
+
     .alert {
       padding: 1rem;
       border-radius: 8px;
@@ -267,9 +273,15 @@
     <!-- Panel Card -->
     <div class="card" id="panel-card" style="display: none;">
       <h2>Add Domain</h2>
-      <div style="margin-top: 1rem;" class="form-group flex-row">
-        <input type="text" id="new-domain" placeholder="example.xyz">
-        <button class="btn" id="add-btn">Add</button>
+      <div style="margin-top: 1rem;" class="form-group">
+        <div class="flex-row">
+          <input type="text" id="new-domain" placeholder="example.xyz">
+          <button class="btn" id="add-btn">Add</button>
+        </div>
+        <label style="display:flex; align-items:center; gap:0.5rem; margin-top:0.75rem; font-size:0.8rem; text-transform:none; letter-spacing:0; font-family:'Inter',sans-serif; color:var(--color-text-muted); cursor:pointer;">
+          <input type="checkbox" id="monitor-only" style="width:auto; accent-color: var(--color-primary);">
+          Monitor only — check its status, but never serve it to landing pages
+        </label>
       </div>
 
       <div class="actions-panel">
@@ -368,6 +380,10 @@
           ? `<br><span style="color:#ef4444">Blocked since: ${new Date(domain.blockedSince).toLocaleString()}</span>` 
           : '';
 
+        const monitorBadge = domain.monitor_only
+          ? `<span class="status-badge status-monitor">monitor only</span>`
+          : '';
+
         div.innerHTML = `
           <div class="domain-info">
             <div class="domain-url">${domain.url}</div>
@@ -376,8 +392,10 @@
               ${blockedMeta}
             </div>
           </div>
-          <div style="display: flex; align-items: center; gap: 1rem;">
+          <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end;">
+            ${monitorBadge}
             <span class="status-badge status-${domain.status || 'unknown'}">${domain.status || 'unknown'}</span>
+            <button class="btn btn-secondary" style="padding:0.4rem 0.6rem; font-size:0.7rem;" onclick="toggleMonitor('${domain.url}')">${domain.monitor_only ? 'Serve' : 'Monitor'}</button>
             <button class="btn btn-danger" onclick="removeDomain('${domain.url}')">Remove</button>
           </div>
         `;
@@ -397,12 +415,22 @@
       }
     }
 
+    async function toggleMonitor(url) {
+      const data = await sendRequest({ action: 'toggle-monitor', domain: url });
+      if (data && data.success) {
+        renderDomains(data.data.domains);
+      } else {
+        showAlert(data ? data.error : 'Failed to toggle monitor mode', 'danger');
+      }
+    }
+
     addBtn.addEventListener('click', async () => {
       const val = newDomainInput.value.trim();
       if (!val) return;
       
+      const monitorOnly = document.getElementById('monitor-only').checked;
       addBtn.disabled = true;
-      const data = await sendRequest({ action: 'add', domain: val });
+      const data = await sendRequest({ action: 'add', domain: val, monitorOnly });
       addBtn.disabled = false;
       
       if (data && data.success) {
