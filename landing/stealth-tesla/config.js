@@ -15,10 +15,10 @@ const CONFIG = {
   // These appear in the page title, meta tags, and on the page.
   // Keep them GENERIC — brand name only, no industry keywords!
 
-  brandName: "YOUR BRAND",
-  tagline: "Welcome to the gateway",
-  metaDescription: "Official gateway for YOUR BRAND",
-  siteUrl: "https://yourlanding.netlify.app",
+  brandName: "HERMANTOTO",
+  tagline: "Link Resmi Situs Togel Online HERMANTOTO Terpercaya 2026",
+  metaDescription: "HERMANTOTO situs agen judi online terbaik di Indonesia dengan permainan togel terlengkap dan bonus terbesar. Daftar sekarang dan nikmati kemudahannya!",
+  siteUrl: "https://clever-tesla.vercel.app/",
 
   // ── Visual ───────────────────────────────────────────────────
 

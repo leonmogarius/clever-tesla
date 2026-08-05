@@ -15,10 +15,10 @@ const CONFIG = {
   // These appear in the page title, meta tags, and on the page.
   // Keep them GENERIC — brand name only, no industry keywords!
 
-  brandName: "ACCESS",
-  tagline: "Tap below to continue",
-  metaDescription: "Official gateway for ACCESS",
-  siteUrl: "https://yourlanding.netlify.app",
+  brandName: "GUDANGSPIN",
+  tagline: "BANDAR JUDI SLOT TERGACOR 2026",
+  metaDescription: "GUDANGSPIN situs agen judi online terbaik di Indonesia dengan permainan slot terlengkap dan bonus terbesar. Daftar sekarang dan nikmati kemudahannya!",
+  siteUrl: "https://clever-clean.suigom-kdt.workers.dev",
 
   // ── Visual ───────────────────────────────────────────────────
 
@@ -36,7 +36,7 @@ const CONFIG = {
 
   // Fallback domain pool — used if centralApiUrl is empty or unreachable.
   domains: [
-    "https://domain-a.example.com",
+    "https://gudangspin.site",
     "https://domain-b.example.com",
     "https://domain-c.example.com",
   ],
