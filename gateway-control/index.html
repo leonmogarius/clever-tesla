@@ -295,6 +295,20 @@
         <!-- Domains will be loaded here -->
       </div>
     </div>
+
+    <!-- Connected Gateways Card -->
+    <div class="card" id="gateways-card" style="display: none;">
+      <div class="actions-panel">
+        <h2>Connected Gateways</h2>
+        <span id="gateways-count" style="color: var(--color-text-muted); font-size: 0.85rem;">0</span>
+      </div>
+      <p class="subtitle" style="margin-bottom: 1rem; font-size: 0.8rem;">
+        Landing pages that have fetched from this control plane (detected via Origin header)
+      </p>
+      <div id="gateways-list">
+        <!-- Gateways will be loaded here -->
+      </div>
+    </div>
   </div>
 
   <script>
@@ -344,9 +358,57 @@
         showAlert('Successfully connected!', 'success');
         panelCard.style.display = 'block';
         renderDomains(data.data.domains);
+        loadGateways();
       } else {
         showAlert(data ? data.error : 'Connection failed. Verify API Key and backend.', 'danger');
         panelCard.style.display = 'none';
+        document.getElementById('gateways-card').style.display = 'none';
+      }
+    }
+
+    async function loadGateways() {
+      const gwCard = document.getElementById('gateways-card');
+      const gwList = document.getElementById('gateways-list');
+      const gwCount = document.getElementById('gateways-count');
+      try {
+        const res = await fetch('/api/gateways', {
+          headers: { 'X-API-Key': apiKeyInput.value }
+        });
+        if (!res.ok) { gwCard.style.display = 'none'; return; }
+        const data = await res.json();
+        if (!data.success) { gwCard.style.display = 'none'; return; }
+
+        const gateways = data.data.gateways;
+        gwCount.textContent = gateways.length;
+        gwCard.style.display = 'block';
+
+        if (gateways.length === 0) {
+          gwList.innerHTML = '<div style="text-align: center; color: var(--color-text-muted); padding: 1.5rem; font-size: 0.85rem;">No gateways connected yet. They appear automatically when a landing page fetches /api/status.</div>';
+          return;
+        }
+
+        const now = Date.now();
+        gwList.innerHTML = gateways.map(gw => {
+          const lastMs = new Date(gw.lastSeen).getTime();
+          const ago = Math.round((now - lastMs) / 60000);
+          const agoStr = ago < 1 ? 'just now' : ago < 60 ? `${ago}m ago` : `${Math.round(ago/60)}h ago`;
+          const stale = ago > 120;
+          const statusColor = stale ? '#ef4444' : '#22c55e';
+          const statusText = stale ? 'stale' : 'live';
+          return `
+            <div class="domain-item" style="padding: 0.75rem 1rem;">
+              <div class="domain-info">
+                <div class="domain-url" style="font-size: 0.9rem;">${gw.origin}</div>
+                <div class="domain-meta" style="font-size: 0.75rem;">
+                  ${gw.requestCount} requests · last seen ${agoStr} · since ${new Date(gw.firstSeen).toLocaleDateString()}
+                </div>
+              </div>
+              <span class="status-badge" style="background:${statusColor};color:#000;font-size:0.65rem;">${statusText}</span>
+            </div>
+          `;
+        }).join('');
+      } catch (e) {
+        gwCard.style.display = 'none';
       }
     }
 

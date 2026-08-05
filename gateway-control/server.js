@@ -45,6 +45,12 @@ db.exec(`
     key TEXT PRIMARY KEY,
     value TEXT
   );
+  CREATE TABLE IF NOT EXISTS gateways (
+    origin TEXT PRIMARY KEY,
+    first_seen TEXT NOT NULL,
+    last_seen TEXT NOT NULL,
+    request_count INTEGER NOT NULL DEFAULT 1
+  );
 `);
 
 // ── Current-domain management (prepared statements + helpers) ──
@@ -161,6 +167,31 @@ function requireAuth(req, res, next) {
 function getAllDomains() {
   const stmt = db.prepare('SELECT * FROM domains ORDER BY id DESC');
   return stmt.all();
+}
+
+// ── Gateway tracking ───────────────────────────────────────────
+// Records which landing-page origins call /api/status. Alerts on first sighting.
+const gwInsert = db.prepare(`
+  INSERT INTO gateways (origin, first_seen, last_seen, request_count)
+  VALUES (?, ?, ?, 1)
+  ON CONFLICT(origin) DO UPDATE SET
+    last_seen = excluded.last_seen,
+    request_count = request_count + 1
+`);
+const gwGetAll = db.prepare('SELECT * FROM gateways ORDER BY last_seen DESC');
+
+function recordGateway(origin) {
+  if (!origin) return;
+  const now = new Date().toISOString();
+  const existing = db.prepare('SELECT 1 FROM gateways WHERE origin = ?').get(origin);
+  gwInsert.run(origin, now, now);
+  // Alert only on first sighting of a new gateway
+  if (!existing) {
+    console.log(`New gateway connected: ${origin}`);
+    notifyTelegram(
+      `🔗 <b>NEW GATEWAY CONNECTED</b>\n<code>${origin}</code> is now redirecting via this control plane.`
+    );
+  }
 }
 
 // TrustPositif health check
@@ -337,6 +368,9 @@ async function checkDomainsHealth({ scope = 'all' } = {}) {
 // GET /api/status - Public API for landing pages
 app.get('/api/status', async (req, res) => {
   try {
+    // Record which gateway (landing page) is calling us, via the Origin header.
+    recordGateway(req.headers.origin);
+
     const domains = getAllDomains();
     const activeDomains = domains
       .filter(d => d.status !== 'blocked' && !d.monitor_only)
@@ -367,6 +401,22 @@ app.get('/api/status', async (req, res) => {
 // GET /health - Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'healthy', port: PORT, timestamp: new Date().toISOString() });
+});
+
+// GET /api/gateways - Admin endpoint to list connected gateways
+app.get('/api/gateways', requireAuth, (req, res) => {
+  try {
+    const gateways = gwGetAll.all().map(gw => ({
+      origin: gw.origin,
+      firstSeen: gw.first_seen,
+      lastSeen: gw.last_seen,
+      requestCount: gw.request_count,
+    }));
+    res.json({ success: true, count: gateways.length, data: { gateways } });
+  } catch (error) {
+    console.error('Gateways API error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
 });
 
 // ==================== ADMIN API ====================
