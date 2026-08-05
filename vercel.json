@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": null,
-  "outputDirectory": "landing/stealth-tesla",
+  "outputDirectory": "landing/stealth-neon",
   "cleanUrls": true,
   "trailingSlash": false,
   "headers": [

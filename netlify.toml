@@ -8,7 +8,7 @@
 # Each Netlify site = one variant = one URL.
 
 [build]
-publish = "landing/stealth-tesla"
+publish = "landing/stealth-neon"
 
 # ── Security Headers ──────────────────────────────────────────────
 # These headers are critical for the anti-block strategy.
