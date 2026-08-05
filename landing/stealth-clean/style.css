@@ -1,0 +1,110 @@
+/* ═══════════════════════════════════════════════════════════════
+   stealth-clean — Light, minimal, fast. Single accent color.
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --bg: #f8fafc;
+  --card: #ffffff;
+  --card-border: #e2e8f0;
+  --text: #0f172a;
+  --text-muted: #64748b;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  width: 100%;
+  max-width: 420px;
+}
+
+/* Card */
+.card {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 4px 24px rgba(15, 23, 42, 0.06);
+}
+
+/* Hero image — full-width banner at top */
+.hero {
+  width: 100%;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.hero img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* Card body */
+.body {
+  padding: 2rem 1.75rem;
+  text-align: center;
+}
+
+/* Brand name */
+.brand {
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  margin-bottom: 0.5rem;
+}
+
+/* Tagline */
+.tagline {
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  margin-bottom: 1.75rem;
+}
+
+/* CTA button */
+.btn {
+  width: 100%;
+  padding: 0.9rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #ffffff;
+  background: var(--accent);
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+}
+
+.btn:hover { background: var(--accent-hover); }
+.btn:active { transform: scale(0.99); }
+
+/* Countdown */
+.countdown {
+  margin-top: 1.25rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+#countdown-number {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Mobile */
+@media (max-width: 480px) {
+  .brand { font-size: 1.5rem; }
+  .body { padding: 1.5rem 1.25rem; }
+}

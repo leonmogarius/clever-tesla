@@ -1,8 +1,14 @@
 # Netlify Configuration
-# Deploys from root directory with security headers
+# Deploys the PRIMARY landing variant (stealth-tesla) from landing/stealth-tesla/.
+#
+# To deploy OTHER variants as separate Netlify sites:
+#   1. Netlify → Add new site → Import from Git → pick this repo
+#   2. Set "Publish directory" to the variant folder, e.g.: landing/stealth-neon/
+#   3. No build command needed.
+# Each Netlify site = one variant = one URL.
 
 [build]
-  publish = "."
+publish = "landing/stealth-tesla"
 
 # ── Security Headers ──────────────────────────────────────────────
 # These headers are critical for the anti-block strategy.
