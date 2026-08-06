@@ -36,28 +36,11 @@
 
   /* ── Inject Brand-Safe SEO into <head> ────────────────────────── */
   function injectSEO() {
-    const { brandName, metaDescription, siteUrl } = CONFIG;
-
-    // Page title
-    document.title = brandName || "Gateway";
-
-    // Meta description
-    const metaDesc = document.querySelector('meta[name="description"]');
-    if (metaDesc) metaDesc.setAttribute("content", metaDescription || "");
-
-    // Canonical
-    const canonical = document.querySelector('link[rel="canonical"]');
-    if (canonical) canonical.setAttribute("href", siteUrl || "");
-
-    // Open Graph
-    const ogTitle = document.querySelector('meta[property="og:title"]');
-    if (ogTitle) ogTitle.setAttribute("content", brandName || "");
-
-    const ogDesc = document.querySelector('meta[property="og:description"]');
-    if (ogDesc) ogDesc.setAttribute("content", metaDescription || "");
-
-    const ogUrl = document.querySelector('meta[property="og:url"]');
-    if (ogUrl) ogUrl.setAttribute("content", siteUrl || "");
+    // SEO meta (title, description, canonical, OG) are now brand-safe in the
+    // raw HTML so Google indexes them reliably without JS rendering. We do NOT
+    // overwrite them here — doing so would clobber the brand-safe values with
+    // the keyword-rich config values (bad for TrustPositif keyword crawlers).
+    // Visible content (brand name, tagline, hero) is injected by injectContent().
   }
 
   /* ── Inject visible content from config ───────────────────────── */

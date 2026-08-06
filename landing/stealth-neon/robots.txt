@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://latoto89.netlify.app/sitemap.xml

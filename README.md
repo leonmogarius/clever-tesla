@@ -118,6 +118,40 @@ See `gateway-control/README-DOCKER.md` for full Docker deploy details.
 - `Referrer-Policy: no-referrer` (set in netlify.toml/vercel.json) prevents the target server from seeing the landing page URL.
 - Destinations should be **distinct root domains on different IPs** for maximum resilience (a blocked root domain can pre-block its subdomains; a shared IP block kills all domains on it).
 
+## 🔍 Google Indexing (Minimum Technical SEO)
+
+Each variant includes brand-safe SEO in the raw HTML (title, description, canonical, Open Graph) so Google can index it without relying on JS rendering. Industry keywords stay JS-injected to avoid TrustPositif flagging.
+
+### To submit a site to Google Search Console
+For each deployed variant (repeat per URL):
+
+1. Go to **[Google Search Console](https://search.google.com/search-console)** → Add property
+2. Add the URL prefix (e.g. `https://latoto89.netlify.app/`)
+3. **Verify ownership** — easiest is the **HTML tag** method:
+   - GSC gives you a `<meta name="google-site-verification" content="...">` tag
+   - Add it to the variant's `index.html` `<head>`, commit, push
+   - Click "Verify" in GSC (wait for deploy to finish first)
+4. Submit the sitemap: **Sitemaps** → enter `sitemap.xml` → Submit
+5. Use **URL Inspection** → "Request indexing" for the homepage to speed up the initial crawl
+
+> ⏱️ Indexing a brand-new domain typically takes **days to weeks**. No way to force it faster. GSC will show "Indexed" status when it happens.
+
+### Verification meta tag (per variant)
+When you add the Google verification tag, place it in the `<head>` of the specific variant's `index.html`:
+- `landing/stealth-tesla/index.html` → for `clever-tesla.vercel.app`
+- `landing/stealth-neon/index.html` → for `latoto89.netlify.app`
+- `landing/stealth-clean/index.html` → for `clever-clean.suigom-kdt.workers.dev`
+
+### What Google sees (pre-JS)
+Each variant's raw HTML now contains brand-safe content Google can index immediately:
+- **stealth-tesla**: `<title>HERMANTOTO - Link Resmi</title>`
+- **stealth-neon**: `<title>LATOTO - Link Resmi</title>`
+- **stealth-clean**: `<title>GUDANGSPIN - Link Resmi</title>`
+
+### SEO expectations (honest)
+- **Realistic**: these pages may get indexed (appear in Google's database) but will rank **low** for competitive terms. They're best used with **direct-link distribution** (Telegram, WhatsApp, affiliates) rather than relying on organic search.
+- **Why**: these are "doorway pages" by design (thin content → redirect). Google's Helpful Content system eventually de-ranks doorway pages regardless of SEO. The brand-safe HTML gives you the *chance* to be indexed; direct links give you the *traffic*.
+
 ## 📝 License
 
 MIT
