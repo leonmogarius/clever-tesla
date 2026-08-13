@@ -328,24 +328,46 @@ async function checkDomainsHealth({ scope = 'all' } = {}) {
     }
 
     // Auto-promote: if the current domain is now blocked, switch to next active backup.
+    let switchedTo = null;
     const currentAfter = getCurrentDomain();
     if (currentAfter && currentAfter.status === 'blocked') {
       const promoted = promoteNextDomain(currentAfter.url);
       if (promoted) {
+        switchedTo = promoted.url;
         console.log(`Current domain blocked. Promoted backup: ${promoted.url}`);
         await notifyTelegram(
-          `🔄 <b>AUTO-SWITCHED DESTINATION</b>\n` +
-          `Previous <code>${currentAfter.url}</code> is blocked.\n` +
-          `All landing pages now redirect to <code>${promoted.url}</code>.`
+          `🚨 <b>BLOCKED — NOW USING NEW DOMAIN</b>\n` +
+          `❌ <code>${currentAfter.url}</code> got blocked by TrustPositif.\n\n` +
+          `✅ <b>NOW USING:</b> <code>${promoted.url}</code>\n` +
+          `All landing pages now redirect to the new domain.`
         );
       } else {
         console.log(`Current domain blocked but NO active backup available. Pool exhausted.`);
         await notifyTelegram(
-          `⚠️ <b>POOL EXHAUSTED</b>\n` +
-          `Current <code>${currentAfter.url}</code> is blocked and there is no active backup.\n` +
-          `Add a fresh domain to restore service.`
+          `⚠️ <b>POOL EXHAUSTED — URGENT</b>\n` +
+          `Current <code>${currentAfter.url}</code> is blocked and there is NO active backup.\n` +
+          `All landing pages are without a destination. Add a fresh domain immediately!`
         );
       }
+    }
+
+    // Heartbeat: send a status summary after EVERY scheduled check so you know it ran,
+    // even when nothing changed. Disable via NOTIFY_HEARTBEAT=false in .env.
+    if (process.env.NOTIFY_HEARTBEAT !== 'false') {
+      const allNow = getAllDomains();
+      const active = allNow.filter(d => d.status === 'active').length;
+      const blocked = allNow.filter(d => d.status === 'blocked').length;
+      const monitor = allNow.filter(d => d.monitor_only).length;
+      const scopeLabel = scope === 'current' ? 'current domain' : 'full pool';
+      const cur = getCurrentDomain();
+      const curLabel = (cur && cur.status === 'active') ? cur.url : (switchedTo || '(none active)');
+      const healthEmoji = (blocked > 0 && active === 0) ? '🔴' : '🟢';
+      await notifyTelegram(
+        `${healthEmoji} <b>SCHEDULED CHECK COMPLETE</b> (${scopeLabel})\n` +
+        `🎯 Now using: <code>${curLabel}</code>\n` +
+        `Pool: ${active} active · ${blocked} blocked · ${monitor} monitor-only\n` +
+        `Checked ${domainsToCheck.length} domain(s) · ${changeLogged.length} status change(s)`
+      );
     }
 
     console.log(
