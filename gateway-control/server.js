@@ -194,6 +194,109 @@ function recordGateway(origin) {
   }
 }
 
+// ── Cloudflare integration ─────────────────────────────────────
+// Settings live in the meta table so they can be changed from the dashboard
+// without editing .env or restarting the container.
+
+const CF_API = 'https://api.cloudflare.com/client/v4';
+
+function getCfSettings() {
+  return {
+    token: metaGet.get('cf_api_token')?.value || null,
+    targetIp: metaGet.get('cf_target_ip')?.value || null,
+    proxied: metaGet.get('cf_proxied')?.value === 'true',
+  };
+}
+
+async function cfRequest(method, path, body) {
+  const { token } = getCfSettings();
+  if (!token) throw new Error('Cloudflare API token not configured');
+  const res = await fetch(`${CF_API}${path}`, {
+    method,
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const json = await res.json();
+  if (!json.success) {
+    const msg = JSON.stringify(json.errors || json);
+    throw new Error(`Cloudflare API error: ${msg}`);
+  }
+  return json.result;
+}
+
+async function cfListZones() {
+  const zones = [];
+  let page = 1;
+  // Page through zones (50/page) so accounts with many domains list fully.
+  for (;;) {
+    const batch = await cfRequest('GET', `/zones?per_page=50&page=${page}`);
+    zones.push(...batch);
+    if (batch.length < 50) break;
+    page++;
+  }
+  return zones;
+}
+
+async function cfListDNS(zoneId) {
+  return cfRequest('GET', `/zones/${zoneId}/dns_records?per_page=100`);
+}
+
+async function cfCreateDNS(zoneId, type, name, content, proxied) {
+  return cfRequest('POST', `/zones/${zoneId}/dns_records`, { type, name, content, proxied: !!proxied });
+}
+
+async function cfDeleteDNS(zoneId, recordId) {
+  return cfRequest('DELETE', `/zones/${zoneId}/dns_records/${recordId}`);
+}
+
+// Point a Cloudflare zone at the target IP: clean existing @/www records,
+// then create a fresh A record. Returns nothing; throws on failure.
+async function cfProvisionZoneDNS(zoneName) {
+  const { targetIp, proxied } = getCfSettings();
+  if (!targetIp) throw new Error('Target IP not configured — set it in Cloudflare settings first');
+  const zones = await cfListZones();
+  const zone = zones.find(z => z.name.toLowerCase() === zoneName.toLowerCase());
+  if (!zone) throw new Error(`Zone ${zoneName} not found in Cloudflare account`);
+
+  // Remove conflicting root/www records so the new one is unambiguous.
+  const existing = await cfListDNS(zone.id);
+  const rootNames = new Set([zone.name.toLowerCase(), '@', 'www', `www.${zone.name}`.toLowerCase()]);
+  for (const rec of existing) {
+    if (rootNames.has(rec.name.toLowerCase()) && ['A', 'CNAME'].includes(rec.type)) {
+      await cfDeleteDNS(zone.id, rec.id);
+    }
+  }
+  await cfCreateDNS(zone.id, 'A', '@', targetIp, proxied);
+  // www as a CNAME to the root, so both forms work.
+  await cfCreateDNS(zone.id, 'CNAME', 'www', zone.name, proxied);
+}
+
+// Best-effort cleanup: when a domain gets blocked, strip its root/www records
+// so the zone is clean for future re-add. Never throws — failures are logged.
+async function cfCleanupZoneDNS(domainUrl) {
+  try {
+    const { token } = getCfSettings();
+    if (!token) return;
+    const hostname = new URL(domainUrl).hostname.toLowerCase().replace(/^www\./, '');
+    const zones = await cfListZones();
+    const zone = zones.find(z => z.name.toLowerCase() === hostname);
+    if (!zone) return; // not a CF zone we manage — nothing to do
+    const existing = await cfListDNS(zone.id);
+    const rootNames = new Set([zone.name.toLowerCase(), '@', 'www', `www.${zone.name}`.toLowerCase()]);
+    for (const rec of existing) {
+      if (rootNames.has(rec.name.toLowerCase()) && ['A', 'CNAME'].includes(rec.type)) {
+        await cfDeleteDNS(zone.id, rec.id);
+        console.log(`CF cleanup: removed ${rec.type} ${rec.name} from ${zone.name}`);
+      }
+    }
+  } catch (e) {
+    console.warn(`CF cleanup failed for ${domainUrl}: ${e.message}`);
+  }
+}
+
 // TrustPositif health check
 //   scope: 'current' → check only the current domain (fast failover, cheap)
 //   scope: 'all'     → check all non-blocked + all monitor-only (full sweep)
@@ -327,6 +430,14 @@ async function checkDomainsHealth({ scope = 'all' } = {}) {
       await notifyTelegram(messages.join('\n\n'));
     }
 
+    // Cloudflare cleanup: strip root/www DNS records of newly blocked domains
+    // (best-effort — failures are logged inside, never break the check cycle).
+    for (const c of changeLogged) {
+      if (c.to === 'blocked') {
+        await cfCleanupZoneDNS(c.url);
+      }
+    }
+
     // Auto-promote: if the current domain is now blocked, switch to next active backup.
     let switchedTo = null;
     const currentAfter = getCurrentDomain();
@@ -420,6 +531,24 @@ app.get('/api/status', async (req, res) => {
   }
 });
 
+// GET /go - Shortener: the ONE stable link that always points at the current
+// destination. 302 (temporary) on purpose — browsers/CDNs cache 301s, which
+// would defeat instant repointing when a domain is rotated.
+app.get('/go', (req, res) => {
+  const current = getCurrentDomain();
+  if (current && current.status === 'active' && !current.monitor_only) {
+    return res.redirect(302, current.url);
+  }
+  // Fallback: first active serveable domain in the pool.
+  const firstActive = db.prepare(
+    "SELECT url FROM domains WHERE status = 'active' AND monitor_only = 0 ORDER BY added_at ASC LIMIT 1"
+  ).get();
+  if (firstActive) return res.redirect(302, firstActive.url);
+  // Last resort: configured fallback URL.
+  if (process.env.FALLBACK_URL) return res.redirect(302, process.env.FALLBACK_URL);
+  return res.status(503).send('No active destination available');
+});
+
 // GET /health - Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'healthy', port: PORT, timestamp: new Date().toISOString() });
@@ -438,6 +567,51 @@ app.get('/api/gateways', requireAuth, (req, res) => {
   } catch (error) {
     console.error('Gateways API error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// GET /api/cf/settings - Admin: read Cloudflare settings (token masked)
+app.get('/api/cf/settings', requireAuth, (req, res) => {
+  const { token, targetIp, proxied } = getCfSettings();
+  res.json({
+    success: true,
+    data: {
+      tokenConfigured: !!token,
+      tokenMasked: token ? `••••${token.slice(-4)}` : null,
+      targetIp,
+      proxied,
+    },
+  });
+});
+
+// GET /api/cf/zones - Admin: list all Cloudflare zones with pool membership
+app.get('/api/cf/zones', requireAuth, async (req, res) => {
+  try {
+    const zones = await cfListZones();
+    const pool = getAllDomains();
+    const poolByHost = new Map(
+      pool.map(d => {
+        let host = d.url;
+        try { host = new URL(d.url).hostname.toLowerCase(); } catch {}
+        return [host, d];
+      })
+    );
+    const result = zones.map(z => {
+      const poolEntry = poolByHost.get(z.name.toLowerCase()) || null;
+      return {
+        id: z.id,
+        name: z.name,
+        cfStatus: z.status,
+        inPool: !!poolEntry,
+        poolStatus: poolEntry ? poolEntry.status : null,
+        monitorOnly: poolEntry ? !!poolEntry.monitor_only : null,
+        isCurrent: poolEntry ? poolEntry.url === getCurrentDomain()?.url : false,
+      };
+    });
+    res.json({ success: true, count: result.length, data: { zones: result } });
+  } catch (error) {
+    console.error('CF zones API error:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -576,6 +750,96 @@ app.post('/api/manage', requireAuth, async (req, res) => {
       return res.json({
         success: true,
         message: `Set ${domainUrl} as the current destination.`,
+        data: { domains: getAllDomains() },
+      });
+    }
+
+    if (action === 'cf-settings') {
+      const { token, targetIp, proxied } = req.body;
+
+      // Validate a newly provided token against the CF API before saving it.
+      if (token !== undefined && token !== '') {
+        try {
+          const test = await fetch(`${CF_API}/zones?per_page=1`, {
+            headers: { 'Authorization': `Bearer ${token}` },
+          });
+          const testJson = await test.json();
+          if (!testJson.success) {
+            return res.status(400).json({
+              error: `Token rejected by Cloudflare: ${JSON.stringify(testJson.errors || [])}`,
+            });
+          }
+        } catch (e) {
+          return res.status(502).json({ error: `Could not reach Cloudflare to validate token: ${e.message}` });
+        }
+        metaSet.run('cf_api_token', token);
+      }
+
+      if (targetIp !== undefined) metaSet.run('cf_target_ip', targetIp.trim());
+      if (proxied !== undefined) metaSet.run('cf_proxied', proxied ? 'true' : 'false');
+
+      return res.json({ success: true, message: 'Cloudflare settings saved.' });
+    }
+
+    if (action === 'cf-add') {
+      if (!domain) {
+        return res.status(400).json({ error: 'Missing parameter: domain is required for cf-add action.' });
+      }
+
+      // Accept a bare zone name or a full URL; we need the zone name.
+      let zoneName = domain.trim().toLowerCase();
+      try {
+        const u = new URL(domain.includes('://') ? domain : `https://${domain}`);
+        zoneName = u.hostname.toLowerCase().replace(/^www\./, '');
+      } catch { /* keep raw */ }
+
+      // Skip if already in the pool (by hostname).
+      const poolHosts = new Set(getAllDomains().map(d => {
+        try { return new URL(d.url).hostname.toLowerCase().replace(/^www\./, ''); }
+        catch { return d.url.toLowerCase(); }
+      }));
+      if (poolHosts.has(zoneName)) {
+        return res.status(400).json({ error: `${zoneName} is already in the pool.` });
+      }
+
+      const monitorOnly = req.body.monitorOnly ? 1 : 0;
+
+      // Create the DNS records pointing at the target IP (when configured).
+      let dnsMessage = '';
+      const { token, targetIp } = getCfSettings();
+      if (token && targetIp) {
+        try {
+          await cfProvisionZoneDNS(zoneName);
+          dnsMessage = ` DNS pointed at ${targetIp}.`;
+        } catch (e) {
+          return res.status(400).json({ error: `Cloudflare provisioning failed: ${e.message}` });
+        }
+      } else {
+        dnsMessage = ' No target IP configured — added to pool without DNS changes.';
+      }
+
+      const url = `https://${zoneName}`;
+      try {
+        const stmt = db.prepare('INSERT INTO domains (url, status, added_at, monitor_only) VALUES (?, ?, ?, ?)');
+        stmt.run(url, 'unknown', new Date().toISOString(), monitorOnly);
+      } catch (err) {
+        if (err.message.includes('UNIQUE')) {
+          return res.status(400).json({ error: `${url} already exists in the pool.` });
+        }
+        throw err;
+      }
+
+      // Same bootstrapping as a regular add: first serveable domain becomes current.
+      if (!monitorOnly && !getCurrentDomain()) {
+        setCurrentDomain(url);
+      }
+
+      // Verify against TrustPositif immediately.
+      await checkDomainsHealth({ scope: 'all' });
+
+      return res.json({
+        success: true,
+        message: `Added ${zoneName} from Cloudflare.${dnsMessage} Triggered initial check.`,
         data: { domains: getAllDomains() },
       });
     }

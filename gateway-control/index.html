@@ -309,6 +309,41 @@
         <!-- Gateways will be loaded here -->
       </div>
     </div>
+
+    <!-- Cloudflare Settings Card -->
+    <div class="card" id="cf-settings-card" style="display: none;">
+      <h2>Cloudflare Settings</h2>
+      <div class="form-group" style="margin-top: 1rem;">
+        <label for="cf-token">API Token <span id="cf-token-status" style="font-weight:400;color:var(--color-text-muted);font-size:0.8rem;"></span></label>
+        <input type="password" id="cf-token" placeholder="Paste Cloudflare API token (Zone:Read + DNS:Edit)">
+      </div>
+      <div class="form-group">
+        <label for="cf-target-ip">Target IP (single destination server)</label>
+        <input type="text" id="cf-target-ip" placeholder="e.g. 192.0.2.10">
+      </div>
+      <label style="display:flex; align-items:center; gap:0.5rem; margin:0.75rem 0; font-size:0.8rem; color:var(--color-text-muted); cursor:pointer;">
+        <input type="checkbox" id="cf-proxied" style="width:auto; accent-color: var(--color-primary);">
+        Proxy records through Cloudflare (orange cloud — hides origin IP)
+      </label>
+      <button class="btn" id="cf-save-btn">Save Settings</button>
+      <p style="margin-top:0.75rem;font-size:0.75rem;color:var(--color-text-muted);">
+        Token is validated against Cloudflare on save. Leave the token field empty to keep the current one.
+      </p>
+    </div>
+
+    <!-- Cloudflare Domains Card -->
+    <div class="card" id="cf-zones-card" style="display: none;">
+      <div class="actions-panel">
+        <h2>Cloudflare Domains</h2>
+        <button class="btn btn-secondary" id="cf-refresh-btn">Refresh</button>
+      </div>
+      <p class="subtitle" style="margin-bottom: 1rem; font-size: 0.8rem;">
+        Zones in your Cloudflare account. Add one to the pool — its DNS is pointed at the target IP automatically.
+      </p>
+      <div id="cf-zones-list">
+        <!-- Zones will be loaded here -->
+      </div>
+    </div>
   </div>
 
   <script>
@@ -359,12 +394,129 @@
         panelCard.style.display = 'block';
         renderDomains(data.data.domains);
         loadGateways();
+        loadCfSettings();
+        loadCfZones();
       } else {
         showAlert(data ? data.error : 'Connection failed. Verify API Key and backend.', 'danger');
         panelCard.style.display = 'none';
         document.getElementById('gateways-card').style.display = 'none';
+        document.getElementById('cf-settings-card').style.display = 'none';
+        document.getElementById('cf-zones-card').style.display = 'none';
       }
     }
+
+    /* ── Cloudflare settings ─────────────────────────────── */
+    async function loadCfSettings() {
+      const card = document.getElementById('cf-settings-card');
+      const statusEl = document.getElementById('cf-token-status');
+      try {
+        const res = await fetch('/api/cf/settings', { headers: { 'X-API-Key': apiKeyInput.value } });
+        if (!res.ok) { card.style.display = 'none'; return; }
+        const data = await res.json();
+        if (!data.success) { card.style.display = 'none'; return; }
+        card.style.display = 'block';
+        document.getElementById('cf-target-ip').value = data.data.targetIp || '';
+        document.getElementById('cf-proxied').checked = !!data.data.proxied;
+        document.getElementById('cf-token').placeholder = data.data.tokenConfigured
+          ? `Saved: ${data.data.tokenMasked} — paste new token to replace`
+          : 'Paste Cloudflare API token (Zone:Read + DNS:Edit)';
+        statusEl.textContent = data.data.tokenConfigured ? '(configured ✓)' : '(not set)';
+      } catch (e) {
+        card.style.display = 'none';
+      }
+    }
+
+    document.getElementById('cf-save-btn').addEventListener('click', async () => {
+      const btn = document.getElementById('cf-save-btn');
+      const payload = {
+        targetIp: document.getElementById('cf-target-ip').value.trim(),
+        proxied: document.getElementById('cf-proxied').checked,
+      };
+      const token = document.getElementById('cf-token').value.trim();
+      if (token) payload.token = token; // empty = keep existing
+
+      btn.disabled = true;
+      showAlert('Saving Cloudflare settings...', 'success');
+      const data = await sendRequest({ action: 'cf-settings', ...payload });
+      btn.disabled = false;
+
+      if (data && data.success) {
+        showAlert('Cloudflare settings saved & validated.', 'success');
+        document.getElementById('cf-token').value = '';
+        loadCfSettings();
+        loadCfZones();
+      } else {
+        showAlert(data ? data.error : 'Failed to save settings', 'danger');
+      }
+    });
+
+    /* ── Cloudflare domains (zones) ──────────────────────── */
+    async function loadCfZones() {
+      const card = document.getElementById('cf-zones-card');
+      const list = document.getElementById('cf-zones-list');
+      try {
+        const res = await fetch('/api/cf/zones', { headers: { 'X-API-Key': apiKeyInput.value } });
+        if (!res.ok) {
+          card.style.display = 'none';
+          return;
+        }
+        const data = await res.json();
+        if (!data.success) {
+          // Most common cause: no token configured yet.
+          card.style.display = 'none';
+          return;
+        }
+        card.style.display = 'block';
+        const zones = data.data.zones;
+
+        if (zones.length === 0) {
+          list.innerHTML = '<div style="text-align:center;color:var(--color-text-muted);padding:1.5rem;font-size:0.85rem;">No zones found in your Cloudflare account.</div>';
+          return;
+        }
+
+        list.innerHTML = zones.map(z => {
+          let right;
+          if (z.inPool) {
+            const badge = z.isCurrent
+              ? '<span class="status-badge" style="background:var(--color-accent);color:#000;">CURRENT</span> '
+              : '';
+            const mon = z.monitorOnly ? '<span class="status-badge status-monitor">monitor only</span> ' : '';
+            right = `${badge}${mon}<span class="status-badge status-${z.poolStatus || 'unknown'}">${z.poolStatus || 'unknown'}</span>`;
+          } else {
+            right = `
+              <button class="btn btn-secondary" style="padding:0.4rem 0.6rem;font-size:0.7rem;" onclick="cfAddDomain('${z.name}', false)">Add</button>
+              <button class="btn btn-secondary" style="padding:0.4rem 0.6rem;font-size:0.7rem;" onclick="cfAddDomain('${z.name}', true)">Add as Monitor</button>`;
+          }
+          return `
+            <div class="domain-item" style="padding:0.75rem 1rem;">
+              <div class="domain-info">
+                <div class="domain-url" style="font-size:0.9rem;">${z.name}</div>
+                <div class="domain-meta" style="font-size:0.75rem;">Cloudflare: ${z.cfStatus}</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;justify-content:flex-end;">${right}</div>
+            </div>`;
+        }).join('');
+      } catch (e) {
+        card.style.display = 'none';
+      }
+    }
+
+    async function cfAddDomain(zoneName, monitorOnly) {
+      if (!confirm(`Add ${zoneName} to the pool${monitorOnly ? ' as monitor-only' : ''}? DNS will be pointed at the target IP.`)) return;
+      showAlert(`Adding ${zoneName}...`, 'success');
+      const data = await sendRequest({ action: 'cf-add', domain: zoneName, monitorOnly });
+      if (data && data.success) {
+        showAlert(data.message, 'success');
+        renderDomains(data.data.domains);
+        await fetchCurrentDomain();
+        renderDomains(data.data.domains);
+        loadCfZones();
+      } else {
+        showAlert(data ? data.error : 'Failed to add domain', 'danger');
+      }
+    }
+
+    document.getElementById('cf-refresh-btn').addEventListener('click', () => loadCfZones());
 
     async function loadGateways() {
       const gwCard = document.getElementById('gateways-card');

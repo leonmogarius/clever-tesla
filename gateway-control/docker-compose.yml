@@ -17,6 +17,8 @@ services:
       - TP_API_KEY=${TP_API_KEY}
       - DB_PATH=/app/data/domains.db
       - NODE_ENV=production
+      # Last-resort redirect target for /go when the pool has no active domain.
+      - FALLBACK_URL=${FALLBACK_URL:-}
     volumes:
       # Persist SQLite database - survives container restarts
       - ./data:/app/data

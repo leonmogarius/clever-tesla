@@ -5,18 +5,25 @@ Static landing pages that serve as anti-block gateways. They redirect users to y
 ## 🏗️ Architecture
 
 ```
-┌──────────────────────────────┐        ┌─────────────────────────────────┐
-│  Landing pages (static)       │ fetch  │  Control Plane (Docker, VPS)     │
-│  Netlify / Vercel / CF Pages  │──────▶│  https://srv1755625.hstgr.cloud  │
-│  landing/<variant>/           │        │  /api/status → current domain    │
-└──────────────────────────────┘        └────────────┬────────────────────┘
-        │ redirect (after countdown)                 │ hourly TrustPositif check
-        ▼                                            ▼
-   Current destination domain  ◀── auto-promotes on block + Telegram alert
+The ONE link you share (never changes):
+   https://srv1755625.hstgr.cloud/go          ← shortener (custom domain later)
+        │ 302 redirect
+        ▼
+   current serving domain (rotates when blocked)
+        │ DNS A record (created via Cloudflare API from the dashboard)
+        ▼
+   TARGET_IP (single destination server)
 ```
 
-- **Landing pages** are pure static files, deployable anywhere. They fetch the active destination from the Control Plane and redirect.
-- **Control Plane** (in `gateway-control/`) is a Dockerized Node app that checks destination domains against the TrustPositif blocklist hourly, tracks status in SQLite, and auto-promotes a backup when the current destination is blocked.
+- **Shortener `/go`** is the entry point: one stable URL that always 302-redirects to the current destination. No JavaScript, no CORS/CSP — works in AMP pages, Telegram bios, QR codes, ads, anywhere a plain link works. Never re-share links when domains rotate.
+- **Control Plane** (in `gateway-control/`) checks destination domains against the TrustPositif blocklist, auto-promotes a backup when the current destination is blocked, and alerts via Telegram (`🚨 NOW USING: <new domain>`).
+- **Cloudflare integration**: the dashboard lists every zone in your Cloudflare account — you choose which ones enter the pool (serving or monitor-only). Adding one points its DNS at your target IP automatically via the CF API. When a domain gets blocked, its CF DNS records are cleaned up automatically.
+- **Landing pages are DEPRECATED** (`landing/` folder kept for reference): they were never indexed by Google. `/go` replaces them as the single distribution link.
+
+### Cloudflare setup (one-time)
+1. Create a scoped API token: Cloudflare Dashboard → My Profile → API Tokens → Create Token → **"Edit zone DNS"** template (includes Zone:Read + DNS:Edit) → All zones. **Never use the Global API Key.**
+2. Open the control plane dashboard → **Cloudflare Settings** card → paste the token, set the Target IP, Save (the token is validated live on save — settings live in the DB, changeable anytime without restarts).
+3. Open the **Cloudflare Domains** card → Add a zone to the pool (or "Add as Monitor"). Its `@`/`www` records are pointed at the target IP automatically, then verified against TrustPositif.
 
 ## 📁 Repo Structure
 
@@ -98,8 +105,11 @@ docker compose up -d --build
 ```
 
 ### Endpoints
-- `GET /api/status` — **public.** Returns `{ current, active, count, lastChecked }`. Landing pages fetch this.
-- `POST /api/manage` — **admin** (`X-API-Key` header). Actions: `list`, `add`, `remove`, `set-current`, `toggle-monitor`, `check-now`.
+- `GET /go` — **public. The shortener.** 302-redirects to the current destination (or first active, or `FALLBACK_URL`, or 503). **This is the link you share.**
+- `GET /api/status` — **public.** Returns `{ current, active, count, lastChecked }`.
+- `POST /api/manage` — **admin** (`X-API-Key` header). Actions: `list`, `add`, `remove`, `set-current`, `toggle-monitor`, `check-now`, `cf-settings` (save CF token/target IP/proxied — token validated live), `cf-add` (add a CF zone to the pool, auto-creates DNS).
+- `GET /api/cf/settings` — **admin.** CF settings (token masked).
+- `GET /api/cf/zones` — **admin.** All Cloudflare zones + pool membership.
 - `GET /health` — health check.
 - `GET /` — admin dashboard (log in with API key).
 
