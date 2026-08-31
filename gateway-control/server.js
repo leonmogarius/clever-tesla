@@ -308,11 +308,12 @@ async function checkDomainsHealth({ scope = 'all' } = {}) {
 
   let domainsToCheck;
   if (scope === 'current') {
-    // Only check the current domain. If none is set, check nothing.
-    domainsToCheck = current ? [current] : [];
+    // Only check the current domain (skip if it's already blocked — dead).
+    domainsToCheck = current && current.status !== 'blocked' ? [current] : [];
   } else {
-    // Full sweep: skip already-blocked (unless monitor-only, which is always re-checked)
-    domainsToCheck = allDomains.filter(d => d.monitor_only || d.status !== 'blocked');
+    // Blocked domains are dead — never re-checked. Saves TrustPositif quota;
+    // re-add a domain manually if you ever want to retry it.
+    domainsToCheck = allDomains.filter(d => d.status !== 'blocked');
   }
   const domainsSkipped = allDomains.filter(d => !domainsToCheck.includes(d));
 
@@ -547,6 +548,75 @@ app.get('/go', (req, res) => {
   // Last resort: configured fallback URL.
   if (process.env.FALLBACK_URL) return res.redirect(302, process.env.FALLBACK_URL);
   return res.status(503).send('No active destination available');
+});
+
+// GET /api/domains - Admin: unified domain list.
+// Cloudflare zones are the PRIMARY source (every zone in the CF account);
+// pool entries whose hostname is not a CF zone appear as 'manual' (secondary).
+// If Cloudflare isn't configured, only manual entries are returned.
+app.get('/api/domains', requireAuth, async (req, res) => {
+  try {
+    const pool = getAllDomains();
+    const current = getCurrentDomain();
+    const { token } = getCfSettings();
+
+    const poolByHost = new Map();
+    for (const d of pool) {
+      let host = d.url;
+      try { host = new URL(d.url).hostname.toLowerCase(); } catch {}
+      poolByHost.set(host, d);
+    }
+
+    const rows = [];
+    const seenHosts = new Set();
+
+    // Primary: Cloudflare zones.
+    if (token) {
+      try {
+        const zones = await cfListZones();
+        for (const z of zones) {
+          const name = z.name.toLowerCase();
+          seenHosts.add(name);
+          const entry = poolByHost.get(name) || null;
+          rows.push({
+            name: z.name,
+            source: 'cloudflare',
+            cfStatus: z.status,
+            inPool: !!entry,
+            poolStatus: entry ? entry.status : null,
+            monitorOnly: entry ? !!entry.monitor_only : null,
+            isCurrent: !!(entry && current && entry.url === current.url),
+          });
+        }
+      } catch (e) {
+        return res.status(502).json({ success: false, error: `Cloudflare API failed: ${e.message}` });
+      }
+    }
+
+    // Secondary: manual pool entries not covered by any CF zone.
+    for (const [host, entry] of poolByHost) {
+      if (seenHosts.has(host)) continue;
+      rows.push({
+        name: host,
+        source: 'manual',
+        cfStatus: null,
+        inPool: true,
+        poolStatus: entry.status,
+        monitorOnly: !!entry.monitor_only,
+        isCurrent: !!(current && entry.url === current.url),
+      });
+    }
+
+    res.json({
+      success: true,
+      count: rows.length,
+      cfConfigured: !!token,
+      data: { domains: rows },
+    });
+  } catch (error) {
+    console.error('Unified domains API error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
 });
 
 // GET /health - Health check endpoint

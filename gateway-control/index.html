@@ -270,30 +270,39 @@
     <!-- Alert Message -->
     <div id="alert-msg" class="alert"></div>
 
-    <!-- Panel Card -->
+    <!-- Panel Card: unified Domains table (Cloudflare primary) -->
     <div class="card" id="panel-card" style="display: none;">
-      <h2>Add Domain</h2>
-      <div style="margin-top: 1rem;" class="form-group">
-        <div class="flex-row">
-          <input type="text" id="new-domain" placeholder="example.xyz">
-          <button class="btn" id="add-btn">Add</button>
-        </div>
-        <label style="display:flex; align-items:center; gap:0.5rem; margin-top:0.75rem; font-size:0.8rem; text-transform:none; letter-spacing:0; font-family:'Inter',sans-serif; color:var(--color-text-muted); cursor:pointer;">
-          <input type="checkbox" id="monitor-only" style="width:auto; accent-color: var(--color-primary);">
-          Monitor only — check its status, but never serve it to landing pages
-        </label>
-      </div>
-
       <div class="actions-panel">
-        <h2>Domain Pool</h2>
-        <button class="btn btn-secondary" id="check-btn">Check Now</button>
+        <h2>Domains</h2>
+        <div style="display:flex;gap:0.5rem;">
+          <button class="btn btn-secondary" id="refresh-btn">Refresh</button>
+          <button class="btn btn-secondary" id="check-btn">Check Now</button>
+        </div>
       </div>
+      <p class="subtitle" style="margin:0.5rem 0 1rem; font-size:0.8rem;">
+        Cloudflare zones are the primary source. Blocked domains are dead — never re-checked.
+      </p>
       <div id="loading" style="display: none; text-align: center; margin: 1rem 0; color: var(--color-text-muted);">
         Checking domains... please wait.
       </div>
-      <div class="domain-list" id="domain-list">
-        <!-- Domains will be loaded here -->
+      <div class="domain-list" id="domains-list">
+        <!-- Unified domains will be loaded here -->
       </div>
+
+      <!-- Manual add (secondary) -->
+      <details style="margin-top:1.25rem;">
+        <summary style="cursor:pointer;color:var(--color-text-muted);font-size:0.85rem;">Add manually (secondary)</summary>
+        <div style="margin-top:0.75rem;" class="form-group">
+          <div class="flex-row">
+            <input type="text" id="new-domain" placeholder="example.xyz">
+            <button class="btn" id="add-btn">Add</button>
+          </div>
+          <label style="display:flex; align-items:center; gap:0.5rem; margin-top:0.75rem; font-size:0.8rem; text-transform:none; letter-spacing:0; font-family:'Inter',sans-serif; color:var(--color-text-muted); cursor:pointer;">
+            <input type="checkbox" id="monitor-only" style="width:auto; accent-color: var(--color-primary);">
+            Monitor only — check its status, but never serve it
+          </label>
+        </div>
+      </details>
     </div>
 
     <!-- Connected Gateways Card -->
@@ -330,20 +339,6 @@
         Token is validated against Cloudflare on save. Leave the token field empty to keep the current one.
       </p>
     </div>
-
-    <!-- Cloudflare Domains Card -->
-    <div class="card" id="cf-zones-card" style="display: none;">
-      <div class="actions-panel">
-        <h2>Cloudflare Domains</h2>
-        <button class="btn btn-secondary" id="cf-refresh-btn">Refresh</button>
-      </div>
-      <p class="subtitle" style="margin-bottom: 1rem; font-size: 0.8rem;">
-        Zones in your Cloudflare account. Add one to the pool — its DNS is pointed at the target IP automatically.
-      </p>
-      <div id="cf-zones-list">
-        <!-- Zones will be loaded here -->
-      </div>
-    </div>
   </div>
 
   <script>
@@ -353,7 +348,7 @@
     const newDomainInput = document.getElementById('new-domain');
     const addBtn = document.getElementById('add-btn');
     const checkBtn = document.getElementById('check-btn');
-    const domainList = document.getElementById('domain-list');
+    const domainList = document.getElementById('domains-list');
     const alertMsg = document.getElementById('alert-msg');
     const loading = document.getElementById('loading');
 
@@ -392,16 +387,14 @@
       if (data && data.success) {
         showAlert('Successfully connected!', 'success');
         panelCard.style.display = 'block';
-        renderDomains(data.data.domains);
         loadGateways();
         loadCfSettings();
-        loadCfZones();
+        loadUnifiedDomains();
       } else {
         showAlert(data ? data.error : 'Connection failed. Verify API Key and backend.', 'danger');
         panelCard.style.display = 'none';
         document.getElementById('gateways-card').style.display = 'none';
         document.getElementById('cf-settings-card').style.display = 'none';
-        document.getElementById('cf-zones-card').style.display = 'none';
       }
     }
 
@@ -444,79 +437,124 @@
         showAlert('Cloudflare settings saved & validated.', 'success');
         document.getElementById('cf-token').value = '';
         loadCfSettings();
-        loadCfZones();
+        loadUnifiedDomains();
       } else {
         showAlert(data ? data.error : 'Failed to save settings', 'danger');
       }
     });
 
-    /* ── Cloudflare domains (zones) ──────────────────────── */
-    async function loadCfZones() {
-      const card = document.getElementById('cf-zones-card');
-      const list = document.getElementById('cf-zones-list');
+    /* ── Unified domains (Cloudflare primary + manual secondary) ── */
+    async function loadUnifiedDomains() {
       try {
-        const res = await fetch('/api/cf/zones', { headers: { 'X-API-Key': apiKeyInput.value } });
-        if (!res.ok) {
-          card.style.display = 'none';
-          return;
-        }
+        const res = await fetch('/api/domains', { headers: { 'X-API-Key': apiKeyInput.value } });
         const data = await res.json();
-        if (!data.success) {
-          // Most common cause: no token configured yet.
-          card.style.display = 'none';
+        if (!res.ok || !data.success) {
+          domainList.innerHTML = `<div style="text-align:center;color:#ef4444;padding:1.5rem;font-size:0.85rem;">${(data && data.error) || 'Failed to load domains'}</div>`;
           return;
         }
-        card.style.display = 'block';
-        const zones = data.data.zones;
-
-        if (zones.length === 0) {
-          list.innerHTML = '<div style="text-align:center;color:var(--color-text-muted);padding:1.5rem;font-size:0.85rem;">No zones found in your Cloudflare account.</div>';
-          return;
-        }
-
-        list.innerHTML = zones.map(z => {
-          let right;
-          if (z.inPool) {
-            const badge = z.isCurrent
-              ? '<span class="status-badge" style="background:var(--color-accent);color:#000;">CURRENT</span> '
-              : '';
-            const mon = z.monitorOnly ? '<span class="status-badge status-monitor">monitor only</span> ' : '';
-            right = `${badge}${mon}<span class="status-badge status-${z.poolStatus || 'unknown'}">${z.poolStatus || 'unknown'}</span>`;
-          } else {
-            right = `
-              <button class="btn btn-secondary" style="padding:0.4rem 0.6rem;font-size:0.7rem;" onclick="cfAddDomain('${z.name}', false)">Add</button>
-              <button class="btn btn-secondary" style="padding:0.4rem 0.6rem;font-size:0.7rem;" onclick="cfAddDomain('${z.name}', true)">Add as Monitor</button>`;
-          }
-          return `
-            <div class="domain-item" style="padding:0.75rem 1rem;">
-              <div class="domain-info">
-                <div class="domain-url" style="font-size:0.9rem;">${z.name}</div>
-                <div class="domain-meta" style="font-size:0.75rem;">Cloudflare: ${z.cfStatus}</div>
-              </div>
-              <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;justify-content:flex-end;">${right}</div>
-            </div>`;
-        }).join('');
+        renderUnifiedDomains(data.data.domains, data.cfConfigured);
       } catch (e) {
-        card.style.display = 'none';
+        domainList.innerHTML = '<div style="text-align:center;color:#ef4444;padding:1.5rem;font-size:0.85rem;">Failed to load domains.</div>';
       }
     }
 
+    function renderUnifiedDomains(domains, cfConfigured) {
+      domainList.innerHTML = '';
+
+      if (!cfConfigured) {
+        const warn = document.createElement('div');
+        warn.className = 'alert alert-danger';
+        warn.style.marginBottom = '1rem';
+        warn.innerHTML = 'Cloudflare not configured — showing manual domains only. Add your API token in Cloudflare Settings below.';
+        domainList.appendChild(warn);
+      }
+
+      // Current destination banner
+      if (currentDomainUrl) {
+        const banner = document.createElement('div');
+        banner.className = 'alert alert-success';
+        banner.style.marginBottom = '1rem';
+        banner.innerHTML = `🎯 Current destination: <strong>${currentDomainUrl}</strong><br><span style="font-size:0.8rem;">Everything redirects here via /go. Auto-switches when blocked.</span>`;
+        domainList.appendChild(banner);
+      }
+
+      if (!domains || domains.length === 0) {
+        domainList.innerHTML += '<div style="text-align: center; color: var(--color-text-muted); padding: 2rem;">No domains found.</div>';
+        return;
+      }
+
+      // Sort: current → in-pool active → unknown → blocked → available (not in pool)
+      const order = d => d.isCurrent ? 0 : !d.inPool ? 4 : { 'active': 1, 'unknown': 2, 'blocked': 3 }[d.poolStatus] || 9;
+      const sorted = [...domains].sort((a, b) => order(a) - order(b));
+
+      sorted.forEach(d => {
+        const url = 'https://' + d.name;
+        const div = document.createElement('div');
+        div.className = 'domain-item';
+        if (d.isCurrent) {
+          div.style.borderColor = 'var(--color-accent)';
+          div.style.boxShadow = '0 0 0 1px var(--color-accent)';
+        }
+
+        const srcBadge = d.source === 'cloudflare'
+          ? '<span class="status-badge" style="background:#f6821f;color:#000;">CF</span>'
+          : '<span class="status-badge" style="background:#64748b;color:#fff;">manual</span>';
+        const currentBadge = d.isCurrent
+          ? '<span class="status-badge" style="background:var(--color-accent);color:#000;">CURRENT</span>' : '';
+        const monBadge = d.inPool && d.monitorOnly
+          ? '<span class="status-badge status-monitor">monitor only</span>' : '';
+
+        let statusBadge = '';
+        let actions = '';
+        if (!d.inPool) {
+          statusBadge = '<span class="status-badge" style="background:#3b82f6;color:#fff;">available</span>';
+          if (d.source === 'cloudflare') {
+            actions = `
+              <button class="btn btn-secondary" style="padding:0.4rem 0.6rem;font-size:0.7rem;" onclick="cfAddDomain('${d.name}', false)">Use</button>
+              <button class="btn btn-secondary" style="padding:0.4rem 0.6rem;font-size:0.7rem;" onclick="cfAddDomain('${d.name}', true)">Monitor</button>`;
+          }
+        } else if (d.poolStatus === 'blocked') {
+          statusBadge = '<span class="status-badge status-blocked">dead</span>';
+          actions = `<button class="btn btn-danger" onclick="removeDomain('${url}')">Remove</button>`;
+        } else {
+          statusBadge = `<span class="status-badge status-${d.poolStatus || 'unknown'}">${d.poolStatus || 'unknown'}</span>`;
+          const setCurrentBtn = (!d.monitorOnly && !d.isCurrent)
+            ? `<button class="btn btn-secondary" style="padding:0.4rem 0.6rem;font-size:0.7rem;" onclick="setCurrentDomain('${url}')">Set Current</button>` : '';
+          actions = `
+            ${setCurrentBtn}
+            <button class="btn btn-secondary" style="padding:0.4rem 0.6rem;font-size:0.7rem;" onclick="toggleMonitor('${url}')">${d.monitorOnly ? 'Use' : 'Monitor'}</button>
+            <button class="btn btn-danger" onclick="removeDomain('${url}')">Remove</button>`;
+        }
+
+        const meta = d.source === 'cloudflare' ? `Cloudflare: ${d.cfStatus}` : 'added manually';
+
+        div.innerHTML = `
+          <div class="domain-info">
+            <div class="domain-url" style="font-size:0.9rem;">${d.name}</div>
+            <div class="domain-meta" style="font-size:0.75rem;">${meta}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;justify-content:flex-end;">
+            ${currentBadge}${srcBadge}${monBadge}${statusBadge}${actions}
+          </div>
+        `;
+        domainList.appendChild(div);
+      });
+    }
+
     async function cfAddDomain(zoneName, monitorOnly) {
-      if (!confirm(`Add ${zoneName} to the pool${monitorOnly ? ' as monitor-only' : ''}? DNS will be pointed at the target IP.`)) return;
+      if (!confirm(`Add ${zoneName}${monitorOnly ? ' as monitor-only' : ' as serving'}? DNS will be pointed at the target IP.`)) return;
       showAlert(`Adding ${zoneName}...`, 'success');
       const data = await sendRequest({ action: 'cf-add', domain: zoneName, monitorOnly });
       if (data && data.success) {
         showAlert(data.message, 'success');
-        renderDomains(data.data.domains);
         await fetchCurrentDomain();
-        renderDomains(data.data.domains);
-        loadCfZones();
+        loadUnifiedDomains();
       } else {
         showAlert(data ? data.error : 'Failed to add domain', 'danger');
       }
     }
 
-    document.getElementById('cf-refresh-btn').addEventListener('click', () => loadCfZones());
+    document.getElementById('refresh-btn').addEventListener('click', () => loadUnifiedDomains());
 
     async function loadGateways() {
       const gwCard = document.getElementById('gateways-card');
@@ -583,89 +621,13 @@
       }
     }
 
-    function renderDomains(domains) {
-      domainList.innerHTML = '';
-
-      // Current destination banner
-      if (currentDomainUrl) {
-        const banner = document.createElement('div');
-        banner.className = 'alert alert-success';
-        banner.style.marginBottom = '1rem';
-        banner.innerHTML = `🎯 Current destination: <strong>${currentDomainUrl}</strong><br><span style="font-size:0.8rem;">All landing pages redirect here. Auto-switches when blocked.</span>`;
-        domainList.appendChild(banner);
-      }
-
-      if (!domains || domains.length === 0) {
-        domainList.innerHTML += '<div style="text-align: center; color: var(--color-text-muted); padding: 2rem;">No domains in the rotation pool yet.</div>';
-        return;
-      }
-
-      // Sort: current first, then active, then unknown, then blocked
-      const sorted = [...domains].sort((a, b) => {
-        const aCurrent = a.url === currentDomainUrl ? 0 : 1;
-        const bCurrent = b.url === currentDomainUrl ? 0 : 1;
-        if (aCurrent !== bCurrent) return aCurrent - bCurrent;
-        const order = { 'active': 1, 'unknown': 2, 'blocked': 3 };
-        return (order[a.status] || 9) - (order[b.status] || 9);
-      });
-
-      sorted.forEach(domain => {
-        const div = document.createElement('div');
-        div.className = 'domain-item';
-        if (domain.url === currentDomainUrl) {
-          div.style.borderColor = 'var(--color-accent)';
-          div.style.boxShadow = '0 0 0 1px var(--color-accent)';
-        }
-
-        const lastCheckedStr = domain.last_checked
-          ? new Date(domain.last_checked).toLocaleString()
-          : 'Never';
-
-        const blockedMeta = domain.blockedSince
-          ? `<br><span style="color:#ef4444">Blocked since: ${new Date(domain.blockedSince).toLocaleString()}</span>`
-          : '';
-
-        const monitorBadge = domain.monitor_only
-          ? `<span class="status-badge status-monitor">monitor only</span>`
-          : '';
-
-        const currentBadge = domain.url === currentDomainUrl
-          ? `<span class="status-badge" style="background:var(--color-accent);color:#000;">CURRENT</span>`
-          : '';
-
-        // "Set as current" button only for serveable (non-monitor, non-blocked) domains that aren't already current
-        const setCurrentBtn = (!domain.monitor_only && domain.url !== currentDomainUrl)
-          ? `<button class="btn btn-secondary" style="padding:0.4rem 0.6rem; font-size:0.7rem;" onclick="setCurrentDomain('${domain.url}')">Set as current</button>`
-          : '';
-
-        div.innerHTML = `
-          <div class="domain-info">
-            <div class="domain-url">${domain.url}</div>
-            <div class="domain-meta">
-              Last checked: ${lastCheckedStr}
-              ${blockedMeta}
-            </div>
-          </div>
-          <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end;">
-            ${currentBadge}
-            ${monitorBadge}
-            <span class="status-badge status-${domain.status || 'unknown'}">${domain.status || 'unknown'}</span>
-            ${setCurrentBtn}
-            <button class="btn btn-secondary" style="padding:0.4rem 0.6rem; font-size:0.7rem;" onclick="toggleMonitor('${domain.url}')">${domain.monitor_only ? 'Serve' : 'Monitor'}</button>
-            <button class="btn btn-danger" onclick="removeDomain('${domain.url}')">Remove</button>
-          </div>
-        `;
-        domainList.appendChild(div);
-      });
-    }
-
     async function removeDomain(url) {
       if (!confirm(`Are you sure you want to remove ${url} from rotation?`)) return;
-      
+
       const data = await sendRequest({ action: 'remove', domain: url });
       if (data && data.success) {
         showAlert(`Successfully removed ${url}`, 'success');
-        renderDomains(data.data.domains);
+        loadUnifiedDomains();
       } else {
         showAlert(data ? data.error : 'Failed to remove domain', 'danger');
       }
@@ -674,7 +636,7 @@
     async function toggleMonitor(url) {
       const data = await sendRequest({ action: 'toggle-monitor', domain: url });
       if (data && data.success) {
-        renderDomains(data.data.domains);
+        loadUnifiedDomains();
       } else {
         showAlert(data ? data.error : 'Failed to toggle monitor mode', 'danger');
       }
@@ -685,7 +647,7 @@
       if (data && data.success) {
         currentDomainUrl = url;
         showAlert(`Set ${url} as the current destination.`, 'success');
-        renderDomains(data.data.domains);
+        loadUnifiedDomains();
       } else {
         showAlert(data ? data.error : 'Failed to set current domain', 'danger');
       }
@@ -694,16 +656,16 @@
     addBtn.addEventListener('click', async () => {
       const val = newDomainInput.value.trim();
       if (!val) return;
-      
+
       const monitorOnly = document.getElementById('monitor-only').checked;
       addBtn.disabled = true;
       const data = await sendRequest({ action: 'add', domain: val, monitorOnly });
       addBtn.disabled = false;
-      
+
       if (data && data.success) {
         showAlert(`Successfully added and checked ${val}`, 'success');
         newDomainInput.value = '';
-        renderDomains(data.data.domains);
+        loadUnifiedDomains();
       } else {
         showAlert(data ? data.error : 'Failed to add domain', 'danger');
       }
@@ -718,7 +680,8 @@
 
       if (data && data.success) {
         showAlert('Domain health check execution complete.', 'success');
-        renderDomains(data.data.domains);
+        await fetchCurrentDomain();
+        loadUnifiedDomains();
       } else {
         showAlert(data ? data.error : 'Check failed', 'danger');
       }
