@@ -110,6 +110,50 @@ if (!getCurrentDomain()) {
 
 // Middleware
 app.use(express.json());
+
+// ── Shortener hostnames ───────────────────────────────────────
+// These hosts are PURE redirectors: every path + query string is forwarded
+// to the current destination (e.g. /register?ref=suigom survives rotation).
+// Must run BEFORE express.static so the dashboard is never served on them.
+const SHORTENER_HOSTS = new Set([
+  'go.tambangemas.org',
+  'gs1.tambangemas.org',
+  'gs2.tambangemas.org',
+  'gs3.tambangemas.org',
+]);
+
+function currentDestinationBase() {
+  const current = getCurrentDomain();
+  if (current && current.status === 'active' && !current.monitor_only) {
+    return current.url;
+  }
+  const firstActive = db.prepare(
+    "SELECT url FROM domains WHERE status = 'active' AND monitor_only = 0 ORDER BY added_at ASC LIMIT 1"
+  ).get();
+  if (firstActive) return firstActive.url;
+  return process.env.FALLBACK_URL || null;
+}
+
+// Redirect to current destination, preserving the given path+query.
+function redirectToCurrent(res, pathWithQuery) {
+  const base = currentDestinationBase();
+  if (!base) return res.status(503).send('No active destination available');
+  let dest;
+  try {
+    dest = new URL(pathWithQuery || '/', base).toString();
+  } catch {
+    dest = base;
+  }
+  return res.redirect(302, dest);
+}
+
+app.use((req, res, next) => {
+  if (SHORTENER_HOSTS.has((req.hostname || '').toLowerCase())) {
+    return redirectToCurrent(res, req.originalUrl);
+  }
+  next();
+});
+
 app.use(express.static('.'));
 
 // CORS Headers helper
@@ -532,22 +576,16 @@ app.get('/api/status', async (req, res) => {
   }
 });
 
-// GET /go - Shortener: the ONE stable link that always points at the current
-// destination. 302 (temporary) on purpose — browsers/CDNs cache 301s, which
-// would defeat instant repointing when a domain is rotated.
-app.get('/go', (req, res) => {
-  const current = getCurrentDomain();
-  if (current && current.status === 'active' && !current.monitor_only) {
-    return res.redirect(302, current.url);
+// GET /go - Shortener path (works on the management host too).
+// Path and query after /go are preserved: /go/register?ref=x → /register?ref=x
+app.get(['/go', '/go/*'], (req, res) => {
+  let pq = req.originalUrl;
+  if (pq === '/go' || pq.startsWith('/go?')) {
+    pq = '/' + pq.slice(4);        // '/go' → '/', '/go?x=1' → '/?x=1'
+  } else if (pq.startsWith('/go/')) {
+    pq = pq.slice(4);              // '/go/reg?a=1' → '/reg?a=1'
   }
-  // Fallback: first active serveable domain in the pool.
-  const firstActive = db.prepare(
-    "SELECT url FROM domains WHERE status = 'active' AND monitor_only = 0 ORDER BY added_at ASC LIMIT 1"
-  ).get();
-  if (firstActive) return res.redirect(302, firstActive.url);
-  // Last resort: configured fallback URL.
-  if (process.env.FALLBACK_URL) return res.redirect(302, process.env.FALLBACK_URL);
-  return res.status(503).send('No active destination available');
+  return redirectToCurrent(res, pq);
 });
 
 // GET /api/domains - Admin: unified domain list.

@@ -23,9 +23,10 @@ services:
       # Persist SQLite database - survives container restarts
       - ./data:/app/data
     labels:
-      # ── Traefik routing: HTTPS via srv1755625.hstgr.cloud ──
+      # ── Traefik routing: management host + shortener hostnames ──
+      # Management host: dashboard/API. Shortener hosts: pure redirectors.
       - "traefik.enable=true"
-      - "traefik.http.routers.gateway.rule=Host(`srv1755625.hstgr.cloud`)"
+      - "traefik.http.routers.gateway.rule=Host(`srv1755625.hstgr.cloud`) || Host(`go.tambangemas.org`) || Host(`gs1.tambangemas.org`) || Host(`gs2.tambangemas.org`) || Host(`gs3.tambangemas.org`)"
       - "traefik.http.routers.gateway.entrypoints=web,websecure"
       - "traefik.http.routers.gateway.tls=true"
       - "traefik.http.routers.gateway.tls.certresolver=letsencrypt"
