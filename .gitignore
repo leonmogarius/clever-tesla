@@ -1,5 +1,6 @@
 # === Secrets / credentials (never commit) ===
 .anymhost-credentials.local
+CREDENTIALS.md
 *.local
 .env
 .env.*
