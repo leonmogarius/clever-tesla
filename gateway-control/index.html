@@ -542,7 +542,7 @@
     }
 
     async function cfAddDomain(zoneName, monitorOnly) {
-      if (!confirm(`Add ${zoneName}${monitorOnly ? ' as monitor-only' : ' as serving'}? DNS will be pointed at the target IP.`)) return;
+      if (!confirm(`Add ${zoneName}${monitorOnly ? ' as monitor-only' : ' as a standby'}?\nNo DNS is created — it stays cold (invisible) until it becomes the current destination.`)) return;
       showAlert(`Adding ${zoneName}...`, 'success');
       const data = await sendRequest({ action: 'cf-add', domain: zoneName, monitorOnly });
       if (data && data.success) {

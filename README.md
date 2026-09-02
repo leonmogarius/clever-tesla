@@ -34,6 +34,7 @@ Control plane (Docker on VPS 72.61.209.216, behind Traefik + Let's Encrypt):
 ### The mental model
 - **Control plane** (this repo, `gateway-control/`) = the brain + shortener host + monitor. Cloudflare is a *tool* it drives, not a replacement.
 - **Cloudflare** = DNS/TLS infrastructure for destination domains (primary source of the domain list).
+- **Cold-standby model**: backup domains carry **no DNS at all** until the moment they're promoted to current. A backup with live DNS is a live gambling link that crawlers can find and block while it's still spare — cold backups stay invisible. `ensureCurrentDns()` provisions DNS at promotion time (auto-promote on block, manual `set-current`, or first add); `cfCleanupZoneDNS` strips it when a domain dies.
 - **Landing pages** (`landing/`) = **DEPRECATED** (never got Google-indexed). `/go` replaced them. Files kept for reference only.
 
 ---
@@ -121,7 +122,7 @@ All admin calls: `POST https://srv1755625.hstgr.cloud/api/manage` with headers
 | Task | Body |
 |---|---|
 | List pool | `{"action":"list"}` |
-| Add CF zone to pool (serving; auto-DNS → target IP + TrustPositif check) | `{"action":"cf-add","domain":"example.com"}` |
+| Add CF zone to pool (serving standby — **cold: no DNS created**, TrustPositif-checked; DNS auto-provisions if/when it becomes current) | `{"action":"cf-add","domain":"example.com"}` |
 | Add CF zone as monitor-only | `{"action":"cf-add","domain":"example.com","monitorOnly":true}` |
 | Add manual (non-CF) domain | `{"action":"add","domain":"https://example.com"}` |
 | Remove from pool | `{"action":"remove","domain":"https://example.com"}` |

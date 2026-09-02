@@ -341,6 +341,31 @@ async function cfCleanupZoneDNS(domainUrl) {
   }
 }
 
+// Cold-standby activation: backups carry NO DNS until they become the current
+// destination. This provisions DNS (→ target IP) at promotion time so the
+// domain only becomes a live, visible link the moment it's actually needed.
+// No-op for domains not managed in our CF account (manual entries).
+async function ensureCurrentDns(domainUrl) {
+  const { token, targetIp } = getCfSettings();
+  if (!token || !targetIp) return false;
+  let hostname = null;
+  try { hostname = new URL(domainUrl).hostname.toLowerCase().replace(/^www\./, ''); }
+  catch { return false; }
+  try {
+    await cfProvisionZoneDNS(hostname);
+    console.log(`DNS provisioned for current destination ${hostname} → ${targetIp}`);
+    return true;
+  } catch (e) {
+    if (/not found in Cloudflare/i.test(e.message)) return false; // manual domain — not ours
+    console.error(`DNS provisioning failed for ${domainUrl}: ${e.message}`);
+    await notifyTelegram(
+      `⚠️ <b>DNS PROVISIONING FAILED</b>\n` +
+      `<code>${domainUrl}</code> was promoted but its DNS could not be created:\n<code>${e.message}</code>`
+    );
+    return false;
+  }
+}
+
 // TrustPositif health check
 //   scope: 'current' → check only the current domain (fast failover, cheap)
 //   scope: 'all'     → check all non-blocked + all monitor-only (full sweep)
@@ -491,11 +516,14 @@ async function checkDomainsHealth({ scope = 'all' } = {}) {
       if (promoted) {
         switchedTo = promoted.url;
         console.log(`Current domain blocked. Promoted backup: ${promoted.url}`);
+        // Cold-standby activation: this is the moment the backup goes live.
+        const dnsOk = await ensureCurrentDns(promoted.url);
         await notifyTelegram(
           `🚨 <b>BLOCKED — NOW USING NEW DOMAIN</b>\n` +
           `❌ <code>${currentAfter.url}</code> got blocked by TrustPositif.\n\n` +
           `✅ <b>NOW USING:</b> <code>${promoted.url}</code>\n` +
-          `All landing pages now redirect to the new domain.`
+          (dnsOk ? `🌐 DNS provisioned → live.` : ``) +
+          `All links now redirect to the new domain.`
         );
       } else {
         console.log(`Current domain blocked but NO active backup available. Pool exhausted.`);
@@ -761,9 +789,10 @@ app.post('/api/manage', requireAuth, async (req, res) => {
       }
 
       // If no current domain is set and this one is serveable (not monitor-only),
-      // make it the current destination.
+      // make it the current destination (and provision DNS — it's going live).
       if (!monitorOnly && !getCurrentDomain()) {
         setCurrentDomain(domainUrl);
+        await ensureCurrentDns(domainUrl);
       }
 
       // Trigger immediate check
@@ -855,9 +884,11 @@ app.post('/api/manage', requireAuth, async (req, res) => {
       }
 
       setCurrentDomain(domainUrl);
+      // Manually promoted: provision DNS so it's actually live (cold-standby model).
+      const dnsOk = await ensureCurrentDns(domainUrl);
       return res.json({
         success: true,
-        message: `Set ${domainUrl} as the current destination.`,
+        message: `Set ${domainUrl} as the current destination.` + (dnsOk ? ' DNS provisioned → live.' : ''),
         data: { domains: getAllDomains() },
       });
     }
@@ -912,19 +943,9 @@ app.post('/api/manage', requireAuth, async (req, res) => {
 
       const monitorOnly = req.body.monitorOnly ? 1 : 0;
 
-      // Create the DNS records pointing at the target IP (when configured).
-      let dnsMessage = '';
-      const { token, targetIp } = getCfSettings();
-      if (token && targetIp) {
-        try {
-          await cfProvisionZoneDNS(zoneName);
-          dnsMessage = ` DNS pointed at ${targetIp}.`;
-        } catch (e) {
-          return res.status(400).json({ error: `Cloudflare provisioning failed: ${e.message}` });
-        }
-      } else {
-        dnsMessage = ' No target IP configured — added to pool without DNS changes.';
-      }
+      // Cold-standby model: NO DNS is created here. Backups stay cold (nothing
+      // pointing at the target IP) so crawlers can't find and block them while
+      // they wait. DNS is only provisioned when a domain becomes current.
 
       const url = `https://${zoneName}`;
       try {
@@ -937,9 +958,11 @@ app.post('/api/manage', requireAuth, async (req, res) => {
         throw err;
       }
 
-      // Same bootstrapping as a regular add: first serveable domain becomes current.
+      // Same bootstrapping as a regular add: first serveable domain becomes
+      // current — and current gets its DNS provisioned (goes live).
       if (!monitorOnly && !getCurrentDomain()) {
         setCurrentDomain(url);
+        await ensureCurrentDns(url);
       }
 
       // Verify against TrustPositif immediately.
@@ -947,7 +970,7 @@ app.post('/api/manage', requireAuth, async (req, res) => {
 
       return res.json({
         success: true,
-        message: `Added ${zoneName} from Cloudflare.${dnsMessage} Triggered initial check.`,
+        message: `Added ${zoneName} as a standby (cold — no DNS until it becomes current). Triggered initial check.`,
         data: { domains: getAllDomains() },
       });
     }
